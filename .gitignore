@@ -174,3 +174,7 @@ cython_debug/
 outputs/
 checkpoints/
 wandb/
+cache/ckpt
+cache/data/AGIQA-3k/images
+cache/env
+cache/envs
