@@ -178,3 +178,7 @@ cache/ckpt
 cache/data/AGIQA-3k/images
 cache/env
 cache/envs
+cache/output
+
+# eval
+eval_results/

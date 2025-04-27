@@ -26,7 +26,22 @@ prompt_str = format_prompt.render(content=prompt_str)
 其中`prompt_str`是用户输入的prompt，`format_prompt`是`math_format.jinja`文件的内容。
 prompt_str = format_prompt.render(content=prompt_str) 这行代码将`jinja`中的`{{ content | trim }}`替换为`prompt_str`。所以`format_prompt.render`函数中会有`content=prompt_str`这个变量赋值，`trim`函数是去除`prompt_str`两端的空白字符(类似于strip())。
 
+**Note:** 这里是默认system prompt（You are a helpful assistant!），jinja里的内容在render之后 = user query + jinja format-prompt，都是user message！
 
+## score function修改
+主要是改config中的以下内容：
+```yaml
+worker:
+  reward:
+    reward_type: function
+    score_function: ./examples/score_function/agiqa3k.py:compute_score
+    score_function_kwargs:
+      format_weight: 0.5
+      threshold: 0.35
+```
+- `score_function`写py名 + 冒号 + 里面的函数名
+    - 在代码里会自动用冒号进行split，之后`config.score_function`是py文件名（会被import为module），`config.score_function_name`是冒号后的函数名
+- `score_function_kwargs`来输入函数的一些参数
 
 # 踩坑记录
 
