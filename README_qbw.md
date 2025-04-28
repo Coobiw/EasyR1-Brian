@@ -45,6 +45,17 @@ worker:
 
 # 踩坑记录
 
+## Ray CPU OOM
+详细报错：
+> ray.exceptions.outofmemoryerror: task was killed due to the node running low on memory.
+
+原因：
+- CPU内存不足
+
+解决方式：
+1. 关掉actor的一些offload，减少CPU Memory占用
+2. 减小val_batch_size（最开始是-1，感觉是一些全load去做eval），改成了512
+
 ## (NCCL问题) RuntimeError: NCCL error: invalid usage
 查看log发现有一条`NCCL version 2.21.5+cuda11.0`，而我的cuda版本是12.4，所以需要提升NCCL版本。
 
