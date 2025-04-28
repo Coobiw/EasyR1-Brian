@@ -95,7 +95,7 @@ def main():
     query_format_2 = 'What is your overall rating on the image-text correspondence between this AI-generated picture and the textual prompt: "{}"?' + f' The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt} with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality. Return the final answer like: <answer> the score </answer>.\n\n'
 
     agiqa_3k = AGIQA3k(annos, sys_prompt, query_format)
-    agiqa_3k_align = AGIQA3k(annos, sys_prompt, query_format_2)
+    agiqa_3k_align = AGIQA3k(annos, sys_prompt, query_format_2, use_prompt=True)
     indices = list(range(len(agiqa_3k)))
 
     min_mos = None

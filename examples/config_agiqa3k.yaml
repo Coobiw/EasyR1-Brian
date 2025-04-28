@@ -7,7 +7,7 @@ data:
   max_prompt_length: 2048
   max_response_length: 2048
   rollout_batch_size: 512
-  val_batch_size: -1
+  val_batch_size: 512
   format_prompt: ./examples/format_prompt/agiqa3k.jinja
   shuffle: true
   seed: 42
@@ -45,7 +45,7 @@ worker:
       enable_cpu_offload: false
       enable_rank0_init: true
     offload:
-      offload_params: true  # true: more CPU memory; false: more GPU memory
+      offload_params: false  # true: more CPU memory; false: more GPU memory
       offload_optimizer: true  # true: more CPU memory; false: more GPU memory
 
   rollout:
@@ -87,7 +87,7 @@ trainer:
   val_before_train: true
   val_only: false
   val_generations_to_log: 3
-  save_freq: 1  # -1 to disable
+  save_freq: 5 # -1 to disable
   save_limit: 15  # -1 to disable
-  save_checkpoint_path: ./cache/output/agiqa3k_output_20250427/
+  save_checkpoint_path: null
   load_checkpoint_path: null
