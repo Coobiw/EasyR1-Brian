@@ -19,16 +19,19 @@ def fit_function(y_label, y_output):
     return y_output_logistic
 
 
-def performance_fit(y_label, y_output):
-    y_output_logistic = fit_function(y_label, y_output)
+def performance_fit(y_label, y_output, func_fit=True):
+    if func_fit:
+        y_output_logistic = fit_function(y_label, y_output)
+    else:
+        y_output_logistic = y_output
     PLCC = stats.pearsonr(y_output_logistic, y_label)[0]
     SRCC = stats.spearmanr(y_output, y_label)[0]
 
     return PLCC, SRCC, (PLCC+SRCC) / 2
 
 if __name__ == "__main__":
-    # output_file = "/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k/Qwen2.5-VL-7B-Instruct_float_1_5.json"
-    output_file = "/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k/Qwen2.5-VL-7B-Instruct_int_1_100.json"
+    out_name = "AGIQA3K_JOINT_n16_continuous-reward0p55_temp0_format0p1_step9"
+    output_file = f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k/{out_name}_float_1_5.json"
 
     y_label, y_out = [], []
     items = json.load(open(output_file))
@@ -40,7 +43,10 @@ if __name__ == "__main__":
             answer_start = model_response.find("<answer>")
             answer_end = model_response.find("</answer>", answer_start + len("<answer>"))
             if answer_end == -1:
-                model_response = model_response[answer_start+len("<answer>") : ]
+                if answer_start == -1:
+                    model_response = model_response
+                else:
+                    model_response = model_response[answer_start+len("<answer>") : ]
             else:
                 model_response = model_response[answer_start+len("<answer>") : answer_end]
                 
@@ -51,5 +57,6 @@ if __name__ == "__main__":
             error_count += 1
             print(f"{i}th error:\t", e)
 
-    print(performance_fit(y_label, y_out))
+    print(performance_fit(y_label, y_out, func_fit=True))
+    print(performance_fit(y_label, y_out, func_fit=False))
     print(error_count)

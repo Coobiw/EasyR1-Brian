@@ -12,8 +12,15 @@ from torch.utils.data import Dataset
 import random
 import numpy as np
 
-random.seed(42)
-np.random.seed(42)
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    random.seed(seed)
+
+set_seed(42)
 
 class AGIQA3k(Dataset):
 
@@ -43,7 +50,7 @@ class AGIQA3k(Dataset):
                             "type": "image",
                             "image": item['image'],
                         },
-                        {"type": "text", "text": self.user_query_format.format(item['prompt']) + self.sys_prompt},
+                        {"type": "text", "text": self.user_query_format + self.sys_prompt},
                     ],
                 }
             ],
@@ -68,7 +75,7 @@ def model_gen(model, processor, messages):
     inputs = inputs.to("cuda")
     
     # Batch Inference: Generation of the output
-    generated_ids = model.generate(**inputs, max_new_tokens=2048, do_sample=False)
+    generated_ids = model.generate(**inputs, max_new_tokens=2048, do_sample=False, temperature=0.)
 
     generated_ids_trimmed = [
         out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -80,8 +87,15 @@ def model_gen(model, processor, messages):
 
 
 if __name__ == "__main__":
-    model_path = "/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instruct"
-    model_name = str(Path(model_path).name)
+    model_path = os.environ.get("MODEL_PATH", "/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instruct")
+    model_name = os.environ.get("MODEL_NAME", str(Path(model_path).name))
+    rl_prompt = os.environ.get("RL_PROMPT", 0)
+    rl_prompt = int(rl_prompt)
+    assert rl_prompt in [0,1]
+
+    print(model_path)
+    print(model_name)
+    print(rl_prompt)
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_path, 
         torch_dtype=torch.bfloat16, 
@@ -95,13 +109,22 @@ if __name__ == "__main__":
     processor = AutoProcessor.from_pretrained("/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
     processor.tokenizer.padding_side  = 'left'
 
-    annos = "/code/All-In-One/qbw/EasyR1-20250410/cache/data/AGIQA-3k/annos/data_jsonl.jsonl"
-    sys_prompt = 'A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>'
+    annos = "/code/All-In-One/qbw/EasyR1-20250410/cache/data/AGIQA-3k/annos/test.jsonl"
 
-    # return_dtype, lower_bound, upper_bound  = "float", "1", "5"
-    return_dtype, lower_bound, upper_bound  = "int", "1", "100"
-    mid_prompt = " rounded to two decimal places," if return_dtype == "float" else ""
-    query_format = 'What is your overall rating on the quality of this AI-generated picture with the textual prompt: "{}"?' + f' The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt} with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality. Return the final answer like: <answer> the score </answer>\n\n'
+    if rl_prompt:
+        sys_prompt = 'A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>'
+    
+        return_dtype, lower_bound, upper_bound  = "float", "1", "5"
+        # return_dtype, lower_bound, upper_bound  = "int", "1", "100"
+        mid_prompt = " rounded to two decimal places," if return_dtype == "float" else ""
+        query_format = 'What is your overall rating on the quality of this AI-generated picture?' + f' The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt} with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality. Return the final answer like: <answer> the score </answer>\n\n'
+    else:
+        sys_prompt = ''
+    
+        return_dtype, lower_bound, upper_bound  = "float", "1", "5"
+        # return_dtype, lower_bound, upper_bound  = "int", "1", "100"
+        mid_prompt = " rounded to two decimal places," if return_dtype == "float" else ""
+        query_format = 'What is your overall rating on the quality of this AI-generated picture?' + f' The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt} with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality. Return the final answer directly.\n\n'
 
     agiqa_3k = AGIQA3k(annos, sys_prompt, query_format)
     output = []

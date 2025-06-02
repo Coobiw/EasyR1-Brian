@@ -1,0 +1,6 @@
+export MODEL_PATH="cache/output/agiqa3k_joint_n16_continuous-thres0p55_format0p1_20250508/global_step_9/actor/huggingface"
+export MODEL_NAME="AGIQA3K_JOINT_n16_continuous-reward0p55_temp0_format0p1_step9"
+export RL_PROMPT=1
+export THIS_CUDA=1
+
+CUDA_VISIBLE_DEVICES=$THIS_CUDA python eval_scripts/agiqa3k_eval.py
