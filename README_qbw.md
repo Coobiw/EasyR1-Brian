@@ -1,3 +1,12 @@
+# 环境配置
+
+```
+pip install -e .
+
+# [Optinal] 如果愿意用SWANLAB替代WANDB进行可视化
+pip install swanlab
+```
+
 # 训练
 
 ## Prompt 修改
