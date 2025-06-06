@@ -180,6 +180,7 @@ cache/data/AGIQA-3k/images
 cache/env
 cache/envs
 cache/output
+nohup.out
 
 # eval
 eval_results/
