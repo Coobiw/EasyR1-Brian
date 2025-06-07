@@ -17,7 +17,7 @@ Implement Actor
 
 import os
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 from einops import rearrange
@@ -53,11 +53,13 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
         if config.use_torch_compile:
-            self.log_probs_from_logits = torch.compile(VF.log_probs_from_logits, dynamic=True)
+            self.compute_entropy_from_logits = torch.compile(VF.entropy_from_logits, dynamic=True)
         else:
-            self.log_probs_from_logits = VF.log_probs_from_logits
+            self.compute_entropy_from_logits = VF.entropy_from_logits
+        
+        self.log_probs_from_logits = VF.log_probs_from_logits
 
-    def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor], temperature: float) -> torch.Tensor:
+    def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor], temperature: float, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
             log_probs: # (bs, response_len)
@@ -68,6 +70,7 @@ class DataParallelPPOActor(BasePPOActor):
         position_ids = micro_batch["position_ids"]
         responses = micro_batch["responses"]
         response_length = responses.size(-1)
+        entropy = None
         if position_ids.dim() == 3:  # qwen2vl mrope
             position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
 
@@ -121,17 +124,44 @@ class DataParallelPPOActor(BasePPOActor):
             logits_rmpad = output.logits.squeeze(0)  # (total_nnz, vocab_size)
             logits_rmpad.div_(temperature)
             # ((total_nnz / sp) + pad)
-            log_probs = self.log_probs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled)
+            inplace_backward = True
+            if calculate_entropy:
+                inplace_backward = False
+            log_probs = self.log_probs_from_logits(
+                logits=logits_rmpad, 
+                labels=input_ids_rmpad_rolled,
+                inplace_backward=inplace_backward,
+            )
+            
+            # compute entropy
+            if calculate_entropy:
+                entropy_rmpad = self.compute_entropy_from_logits(logits_rmpad)  # ((total_nnz / sp) + pad)
 
             # gather log_prob if sp > 1
             if self.config.ulysses_sequence_parallel_size > 1:
                 # gather and unpad for the ulysses sp
                 log_probs = gather_outputs_and_unpad(log_probs, gather_dim=0, unpad_dim=0, padding_size=pad_size)
+                if calculate_entropy:
+                    entropy_rmpad = gather_outputs_and_unpad(
+                        entropy_rmpad,
+                        gather_dim=0,
+                        unpad_dim=0,
+                        padding_size=pad_size,
+                    )
 
             # pad back to (bsz, seqlen)
+            if calculate_entropy:
+                full_entropy = pad_input(
+                    hidden_states=entropy_rmpad.unsqueeze(-1),
+                    indices=indices,
+                    batch=batch_size,
+                    seqlen=seqlen,
+                )
             full_log_probs = pad_input(
                 hidden_states=log_probs.unsqueeze(-1), indices=indices, batch=batch_size, seqlen=seqlen
             )
+            if calculate_entropy:
+                entropy = full_entropy.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
             log_probs = full_log_probs.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
         else:
             output = self.actor_module(
@@ -145,8 +175,10 @@ class DataParallelPPOActor(BasePPOActor):
             logits.div_(temperature)
             logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
             log_probs = self.log_probs_from_logits(logits, responses)  # (bsz, response_length)
+            if calculate_entropy:
+                entropy = VF.entropy_from_logits(logits)  # (bsz, response_length)
 
-        return log_probs
+        return entropy, log_probs
 
     def _optimizer_step(self) -> torch.Tensor:
         if isinstance(self.actor_module, FSDP):
@@ -163,7 +195,7 @@ class DataParallelPPOActor(BasePPOActor):
         return grad_norm
 
     @torch.no_grad()
-    def compute_log_prob(self, data: DataProto) -> torch.Tensor:
+    def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
 
         Args:
@@ -194,16 +226,23 @@ class DataParallelPPOActor(BasePPOActor):
             self.config.micro_batch_size_per_device_for_experience
         )
         log_probs_lst = []
+        entropy_lst = []
+        
         if self.rank == 0:
             micro_batches = tqdm(micro_batches, desc="Compute log probs", position=2)
 
         for micro_batch in micro_batches:
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
-            log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
+            entropy, log_probs = self._forward_micro_batch(model_inputs, temperature=temperature, calculate_entropy=calculate_entropy)
             log_probs_lst.append(log_probs)
+            if calculate_entropy:
+                entropy_lst.append(entropy)
 
         log_probs = torch.concat(log_probs_lst, dim=0)
-        return log_probs
+        entropys = None
+        if calculate_entropy:
+            entropys = torch.concat(entropy_lst, dim=0)
+        return entropys, log_probs
 
     def update_policy(self, data: DataProto) -> Dict[str, Any]:
         self.actor_module.train()
@@ -245,8 +284,10 @@ class DataParallelPPOActor(BasePPOActor):
                     advantages = model_inputs["advantages"]
 
                     # all return: (bsz, response_length)
-                    log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
-                    entropy_loss = -VF.masked_mean(log_probs, response_mask)  # estimator of entropy loss
+                    calculate_entropy = False
+                    if self.config.entropy_coeff != 0:
+                        calculate_entropy = True
+                    entropy, log_probs = self._forward_micro_batch(model_inputs, temperature=temperature, calculate_entropy=calculate_entropy)
 
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
@@ -256,7 +297,13 @@ class DataParallelPPOActor(BasePPOActor):
                         clip_ratio_low=self.config.clip_ratio_low,
                         clip_ratio_high=self.config.clip_ratio_high,
                         clip_ratio_dual=self.config.clip_ratio_dual,
+                        loss_agg_mode=self.config.loss_agg_mode,
                     )
+                    
+                    if self.config.entropy_coeff != 0:
+                        entropy_loss = core_algos.agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
+                        pg_loss = pg_loss - entropy_loss * self.config.entropy_coeff
+                    
                     if "ref_log_probs" in model_inputs:
                         ref_log_probs = model_inputs["ref_log_probs"]
                         # compute kl loss
@@ -265,7 +312,7 @@ class DataParallelPPOActor(BasePPOActor):
                             ref_log_probs=ref_log_probs,
                             kl_penalty=self.config.kl_penalty,
                         )
-                        kl_loss = VF.masked_mean(kld, response_mask)
+                        kl_loss = core_algos.agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
                         pg_loss = pg_loss + kl_loss * self.config.kl_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef
