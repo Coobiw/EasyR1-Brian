@@ -30,6 +30,11 @@ worker:
     max_grad_norm: 1.0
     padding_free: true
     ulysses_sequence_parallel_size: 1
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.3
+    clip_ratio_dual: 3.0
+    entropy_coeff: 0.
+    loss_agg_mode: "token-mean"
     model:
       model_path: Qwen/Qwen2.5-7B-Instruct
       enable_gradient_checkpointing: true

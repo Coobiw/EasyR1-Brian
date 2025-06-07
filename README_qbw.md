@@ -7,6 +7,29 @@ pip install -e .
 pip install swanlab
 ```
 
+# Entropy 计算
+```
+def entropy_from_logits(logits: torch.Tensor):
+    """
+    Calculate entropy from logits.
+    Entropy: H(X) = -∑p(x)log(p(x))
+    For logits, we have：
+        p(x) = softmax(logits) = exp(logits) / sum(exp(logits))
+        log(p(x)) = logits - logsumexp(logits)
+    Involve them into Entropy Compute:
+        H(X) = -∑p(x)(logits - logsumexp(logits))
+        = -∑p(x)logits + logsumexp(logits)∑p(x)
+        = -∑p(x)logits + logsumexp(logits)
+        = logsumexp(logits) - ∑p(x)logits
+    This is the formula implemented in the code.
+    This implementation is more numerically stable than directly calculating -∑p(x)log(p(x)), 
+    because it avoids the problem of numerical overflow or underflow during the calculation process.
+    """
+    pd = torch.nn.functional.softmax(logits, dim=-1)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+    return entropy
+```
+
 # 训练
 
 ## Prompt 修改
