@@ -284,10 +284,7 @@ class DataParallelPPOActor(BasePPOActor):
                     advantages = model_inputs["advantages"]
 
                     # all return: (bsz, response_length)
-                    calculate_entropy = False
-                    if self.config.entropy_coeff != 0:
-                        calculate_entropy = True
-                    entropy, log_probs = self._forward_micro_batch(model_inputs, temperature=temperature, calculate_entropy=calculate_entropy)
+                    entropy, log_probs = self._forward_micro_batch(model_inputs, temperature=temperature, calculate_entropy=True)
 
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
@@ -300,8 +297,8 @@ class DataParallelPPOActor(BasePPOActor):
                         loss_agg_mode=self.config.loss_agg_mode,
                     )
                     
+                    entropy_loss = core_algos.agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
                     if self.config.entropy_coeff != 0:
-                        entropy_loss = core_algos.agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
                         pg_loss = pg_loss - entropy_loss * self.config.entropy_coeff
                     
                     if "ref_log_probs" in model_inputs:
