@@ -242,7 +242,7 @@ class DataParallelPPOActor(BasePPOActor):
         entropys = None
         if calculate_entropy:
             entropys = torch.concat(entropy_lst, dim=0)
-        return entropys, log_probs
+        return log_probs, entropys
 
     def update_policy(self, data: DataProto) -> Dict[str, Any]:
         self.actor_module.train()
