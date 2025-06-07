@@ -57,7 +57,7 @@ class DataParallelPPOActor(BasePPOActor):
         else:
             self.compute_entropy_from_logits = VF.entropy_from_logits
         
-        self.log_probs_from_logits = VF.log_probs_from_logits
+        self.log_probs_from_logits = VF.logprobs_from_logits
 
     def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor], temperature: float, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
