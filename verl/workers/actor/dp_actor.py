@@ -57,7 +57,7 @@ class DataParallelPPOActor(BasePPOActor):
         else:
             self.compute_entropy_from_logits = VF.entropy_from_logits
         
-        self.log_probs_from_logits = VF.logprobs_from_logits
+        self.log_probs_from_logits = VF.log_probs_from_logits_easyr1_original
 
     def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor], temperature: float, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -125,7 +125,7 @@ class DataParallelPPOActor(BasePPOActor):
             logits_rmpad.div_(temperature)
             # ((total_nnz / sp) + pad)
             inplace_backward = True
-            if calculate_entropy:
+            if calculate_entropy and self.config.entropy_coeff != 0.:
                 inplace_backward = False
             log_probs = self.log_probs_from_logits(
                 logits=logits_rmpad, 
@@ -188,10 +188,10 @@ class DataParallelPPOActor(BasePPOActor):
 
         if not torch.isfinite(grad_norm):
             print("Gradient norm is not finite. Skip update.")
+            self.actor_optimizer.zero_grad()
         else:
             self.actor_optimizer.step()
 
-        self.actor_optimizer.zero_grad()
         return grad_norm
 
     @torch.no_grad()
@@ -274,6 +274,7 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.rank == 0:
                     micro_batches = tqdm(micro_batches, desc="Update policy", position=3)
 
+                self.actor_optimizer.zero_grad()
                 for micro_batch in micro_batches:
                     model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
                     responses = model_inputs["responses"]
@@ -299,7 +300,9 @@ class DataParallelPPOActor(BasePPOActor):
                     
                     entropy_loss = core_algos.agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
                     if self.config.entropy_coeff != 0:
-                        pg_loss = pg_loss - entropy_loss * self.config.entropy_coeff
+                        policy_loss = pg_loss - entropy_loss * self.config.entropy_coeff
+                    else:
+                        policy_loss = pg_loss
                     
                     if "ref_log_probs" in model_inputs:
                         ref_log_probs = model_inputs["ref_log_probs"]
@@ -310,11 +313,11 @@ class DataParallelPPOActor(BasePPOActor):
                             kl_penalty=self.config.kl_penalty,
                         )
                         kl_loss = core_algos.agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
-                        pg_loss = pg_loss + kl_loss * self.config.kl_coef
+                        policy_loss = policy_loss + kl_loss * self.config.kl_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef
 
-                    loss = pg_loss / gradient_accumulation
+                    loss = policy_loss / gradient_accumulation
                     loss.backward()
 
                     batch_metrics = {
@@ -329,4 +332,5 @@ class DataParallelPPOActor(BasePPOActor):
                 grad_norm = self._optimizer_step()
                 append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item()})
 
+        self.actor_optimizer.zero_grad()
         return metrics

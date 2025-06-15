@@ -4,6 +4,7 @@ from scipy.optimize import curve_fit
 
 import json
 import re
+import argparse
 
 def logistic_func(X, bayta1, bayta2, bayta3, bayta4):
     logisticPart = 1 + np.exp(np.negative(np.divide(X - bayta3, np.abs(bayta4))))
@@ -29,8 +30,16 @@ def performance_fit(y_label, y_output, func_fit=True):
 
     return PLCC, SRCC, (PLCC+SRCC) / 2
 
-if __name__ == "__main__":
-    out_name = "AGIQA3K_JOINT_n16_continuous-reward0p55_temp0_format0p1_step9"
+def main():
+    parser = argparse.ArgumentParser(description="模型路径与名称配置")
+    parser.add_argument(
+        "--out_name",
+        default="",
+        help="模型输出文件主要名称",
+    )
+    args = parser.parse_args()
+    
+    out_name = args.out_name
     output_file = f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k/{out_name}_float_1_5.json"
 
     y_label, y_out = [], []
@@ -56,7 +65,16 @@ if __name__ == "__main__":
         except Exception as e:
             error_count += 1
             print(f"{i}th error:\t", e)
-
-    print(performance_fit(y_label, y_out, func_fit=True))
-    print(performance_fit(y_label, y_out, func_fit=False))
+            
     print(error_count)
+    output1 = performance_fit(y_label, y_out, func_fit=True)
+    output2 = performance_fit(y_label, y_out, func_fit=False)
+
+    print(output1)
+    print(output2)
+
+    return output1, output2
+    
+
+if __name__ == "__main__":
+    main()

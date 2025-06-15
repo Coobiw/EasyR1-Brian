@@ -1,4 +1,5 @@
 import os
+import argparse
 import json
 from pathlib import Path
 from tqdm import tqdm
@@ -87,10 +88,27 @@ def model_gen(model, processor, messages):
 
 
 if __name__ == "__main__":
-    model_path = os.environ.get("MODEL_PATH", "/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instruct")
-    model_name = os.environ.get("MODEL_NAME", str(Path(model_path).name))
-    rl_prompt = os.environ.get("RL_PROMPT", 0)
-    rl_prompt = int(rl_prompt)
+    parser = argparse.ArgumentParser(description="模型路径与名称配置")
+    parser.add_argument(
+        "--model_path",
+        default="/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instruct",
+        help="模型文件或目录的完整路径（默认值如左）",
+    )
+    parser.add_argument(
+        "--model_name",
+        default=None,
+        help="模型名称；若不指定则自动取路径最后一层目录/文件名",
+    )
+    parser.add_argument(
+        "--rl_prompt",
+        default=1,
+        type=int,
+    )
+    args = parser.parse_args()
+    model_path = args.model_path
+    model_name = args.model_name or Path(model_path).name
+    
+    rl_prompt = args.rl_prompt
     assert rl_prompt in [0,1]
 
     print(model_path)
