@@ -54,10 +54,10 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_optimizer = actor_optimizer
         if config.use_torch_compile:
             self.compute_entropy_from_logits = torch.compile(VF.entropy_from_logits, dynamic=True)
+            self.log_probs_from_logits = torch.compile(VF.log_probs_from_logits_easyr1_original, dynamic=True)
         else:
             self.compute_entropy_from_logits = VF.entropy_from_logits
-        
-        self.log_probs_from_logits = VF.log_probs_from_logits_easyr1_original
+            self.log_probs_from_logits = VF.log_probs_from_logits_easyr1_original
 
     def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor], temperature: float, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
