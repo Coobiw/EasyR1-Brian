@@ -1,12 +1,12 @@
 data:
-  train_files: Coobiw/agiqa3k_joint@train
-  val_files: Coobiw/agiqa3k_joint@test
+  train_files: Coobiw/agiqa3k_qual@train
+  val_files: Coobiw/agiqa3k_qual@test
   prompt_key: problem
   answer_key: answer
   image_key: images
   max_prompt_length: 2048
   max_response_length: 2048
-  rollout_batch_size: 512
+  rollout_batch_size: 128
   val_batch_size: 512
   format_prompt: ./examples/format_prompt/agiqa3k.jinja
   shuffle: true
@@ -32,7 +32,7 @@ worker:
     ulysses_sequence_parallel_size: 1
     clip_ratio_low: 0.2
     clip_ratio_high: 0.3
-    clip_ratio_dual: 3.0
+    clip_ratio_dual: 10.0
     entropy_coeff: 0.
     loss_agg_mode: "token-mean"
     model:
@@ -78,8 +78,8 @@ worker:
     reward_type: function
     score_function: ./examples/score_function/agiqa3k.py:compute_score_continuous
     score_function_kwargs:
-      format_weight: 0.5
-      threshold: 0.55
+      format_weight: 0.1
+      threshold: 0.75
 
 trainer:
   total_episodes: 10
