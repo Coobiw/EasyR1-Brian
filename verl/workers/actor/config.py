@@ -96,6 +96,10 @@ class ActorConfig:
     use_kl_loss: bool = field(default=False, init=False)
     kl_penalty: str = field(default="kl", init=False)
     kl_coef: float = field(default=0.0, init=False)
+    """entropy loss"""
+    entropy_coeff: float = 0.0
+    """loss aggregation"""
+    loss_agg_mode: str = field(default="token-mean", init=False)
 
 
 @dataclass

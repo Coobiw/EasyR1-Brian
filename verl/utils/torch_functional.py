@@ -35,8 +35,8 @@ except ImportError:
 
 
 @torch.compiler.disable()
-def log_probs_from_logits_flash_attn(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    output = cross_entropy_loss(logits, labels, inplace_backward=True)
+def log_probs_from_logits_flash_attn(logits: torch.Tensor, labels: torch.Tensor, inplace_backward: bool=True) -> torch.Tensor:
+    output = cross_entropy_loss(logits, labels, inplace_backward=inplace_backward)
     if not isinstance(output, tuple):
         raise ValueError(
             "please make sure flash-attn>=2.4.3 where cross_entropy_loss returns Tuple[losses, z_losses]."
@@ -44,10 +44,8 @@ def log_probs_from_logits_flash_attn(logits: torch.Tensor, labels: torch.Tensor)
 
     return -output[0]
 
-
-def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+def log_probs_from_logits_easyr1_original(logits: torch.Tensor, labels: torch.Tensor, inplace_backward: bool=True) -> torch.Tensor:
     """Compute log probs on the label ids given logits.
-
     We may use torch compile to speed up computing.
 
     Args:
@@ -62,12 +60,31 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
     logits = logits.contiguous().view(-1, vocab_dim)
     labels = labels.contiguous().view(-1)
     if FLAH_ATTN_CROSS_ENTROPY_LOSS_AVAILABLE:
-        output = log_probs_from_logits_flash_attn(logits, labels)
+        output = log_probs_from_logits_flash_attn(logits, labels, inplace_backward=inplace_backward)
     else:  # fall back to torch kernel, upcast logits to fp32
         output = F.cross_entropy(logits.float(), labels, reduction="none")
 
     return output.view(*batch_dim)
 
+def entropy_from_logits(logits: torch.Tensor):
+    """
+    Calculate entropy from logits.
+    Entropy: H(X) = -∑p(x)log(p(x))
+    For logits, we have：
+        p(x) = softmax(logits) = exp(logits) / sum(exp(logits))
+        log(p(x)) = logits - logsumexp(logits)
+    Involve them into Entropy Compute:
+        H(X) = -∑p(x)(logits - logsumexp(logits))
+        = -∑p(x)logits + logsumexp(logits)∑p(x)
+        = -∑p(x)logits + logsumexp(logits)
+        = logsumexp(logits) - ∑p(x)logits
+    This is the formula implemented in the code.
+    This implementation is more numerically stable than directly calculating -∑p(x)log(p(x)), 
+    because it avoids the problem of numerical overflow or underflow during the calculation process.
+    """
+    pd = torch.nn.functional.softmax(logits, dim=-1)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+    return entropy
 
 def masked_mean(values: torch.Tensor, mask: torch.Tensor, dim: int = None, eps: float = 1e-8) -> torch.Tensor:
     """Compute mean of tensor with a masked values."""
