@@ -3,6 +3,7 @@ import os
 from datasets import Dataset, DatasetDict, Sequence
 from datasets import Image as ImageData
 from PIL import Image
+import numpy as np
 
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import torch
 
 import random
 random.seed(42)
+np.random.seed(42)
 
 from huggingface_hub import login
 
@@ -50,7 +52,6 @@ class AGIQA3k(torch.utils.data.Dataset):
                 }
             ],
             "mos_perception": item['mos_perception'],
-            "mos_align": item['mos_align']
         }
 
 def generate_data(data_source, indices, min_mos, max_mos):
@@ -70,6 +71,7 @@ def to_jsonl(data_lines, indices, file_name):
             fo.write(data_line + "\n")
     print(f"{file_name} has finished!!!")
 
+
 def main():
     annos = "/code/All-In-One/qbw/EasyR1-20250410/cache/data/AGIQA-3k/annos/data_jsonl.jsonl"
     sys_prompt = 'A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>'
@@ -79,11 +81,10 @@ def main():
     query_format = 'What is your overall rating on the quality of this AI-generated picture?' + f' The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt} with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality. Return the final answer like: <answer> the score </answer>.\n\n'
 
     agiqa_3k = AGIQA3k(annos, sys_prompt, query_format)
-    indices = list(range(len(agiqa_3k)))
 
     min_mos = None
     max_mos = None
-    for idx in indices:
+    for idx in range(len(agiqa_3k)):
         mos = agiqa_3k[idx]['mos_perception']
         if (min_mos is None) and (max_mos is None):
             min_mos = mos
@@ -96,20 +97,36 @@ def main():
             max_mos = mos
         
 
-    random.shuffle(indices)
-    train_size = int(0.8 * len(indices))
-    train_indices = indices[:train_size]
-    test_indices = indices[train_size:]
+    def agiqa3k_split_fn():
+        count = int(0.8 * 300)
+    
+        new_indices = np.random.permutation(300)
+        print(new_indices[count:])
+    
+        train_indices, test_indices = [], []
+    
+        for i in range(len(agiqa_3k)):
+            image_name = Path(agiqa_3k[i]["messages"][0]['content'][0]['image']).stem
+            image_name_split = image_name.split("_")
+            idx = int(image_name_split[-1])
+    
+            if idx in new_indices[:count]:
+                train_indices.append(i)
+            else:
+                test_indices.append(i)
+    
+        return train_indices, test_indices
+    train_indices, test_indices = agiqa3k_split_fn()
 
     with open(annos) as f:
         lines = list(f.readlines())
-        to_jsonl(data_lines=lines, indices=train_indices, file_name='./annos/train.jsonl')
-        to_jsonl(data_lines=lines, indices=test_indices, file_name='./annos/test.jsonl')
+        to_jsonl(data_lines=lines, indices=train_indices, file_name='./annos/train_0621.jsonl')
+        to_jsonl(data_lines=lines, indices=test_indices, file_name='./annos/test_0621.jsonl')
     
     trainset = Dataset.from_generator(generate_data, gen_kwargs={"data_source": agiqa_3k, "indices": train_indices, "min_mos": min_mos, "max_mos": max_mos})
     testset = Dataset.from_generator(generate_data, gen_kwargs={"data_source": agiqa_3k, "indices": test_indices, "min_mos": min_mos, "max_mos": max_mos})
     dataset = DatasetDict({"train": trainset, "test": testset}).cast_column("images", Sequence(ImageData()))
-    dataset.push_to_hub("Coobiw/agiqa3k_qual", private=True, token=True)
+    dataset.push_to_hub("Coobiw/agiqa3k_qual_0621", private=False, token=True)
 
 
 if __name__ == "__main__":
