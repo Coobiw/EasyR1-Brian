@@ -37,15 +37,10 @@ def main():
         default="",
         help="模型输出文件主要名称",
     )
-    parser.add_argument(
-        "--vllm",
-        action="store_true",
-        help="是否使用vllm目录",
-    )
     args = parser.parse_args()
     
     out_name = args.out_name
-    dir_name = "agiqa-3k_vllm" if args.vllm else "agiqa-3k"
+    dir_name = "agiqa-3k_vllm_voting"
     output_file = f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/{dir_name}/{out_name}_float_1_5.json"
 
     y_label, y_out = [], []
@@ -53,24 +48,14 @@ def main():
 
     error_count = 0
     for i, item in enumerate(items):
-        model_response = item['model_response']
-        try:
-            answer_start = model_response.find("<answer>")
-            answer_end = model_response.find("</answer>", answer_start + len("<answer>"))
-            if answer_end == -1:
-                if answer_start == -1:
-                    model_response = model_response
-                else:
-                    model_response = model_response[answer_start+len("<answer>") : ]
-            else:
-                model_response = model_response[answer_start+len("<answer>") : answer_end]
-                
-            out = float(model_response.strip())
+        voting_result = item['voting_result']
+        if voting_result is not None:
+            out = float(voting_result)
             y_out.append(out)
             y_label.append(float(item['mos_perception']))
-        except Exception as e:
+        else:
             error_count += 1
-            print(f"{i}th error:\t", e)
+            print(f"{i}th error")
             
     print(error_count)
     output1 = performance_fit(y_label, y_out, func_fit=True)

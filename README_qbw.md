@@ -75,6 +75,39 @@ worker:
     - 在代码里会自动用冒号进行split，之后`config.score_function`是py文件名（会被import为module），`config.score_function_name`是冒号后的函数名
 - `score_function_kwargs`来输入函数的一些参数
 
+# vllm部署 + 测试
+
+## 部署
+命令:
+
+```
+vllm serve $CKPT_PATH \
+  --served-model-name $MODEL_NAME \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes \
+  --max-model-len 8192 \
+  --tensor-parallel-size 4 \
+  --port 8000 \
+  --host 0.0.0.0 \
+  --dtype bfloat16 \
+  --limit-mm-per-prompt image=5,video=5 \
+  --mm-processor-kwargs '{"max_pixels": 1048576, "min_pixels": 262144}'
+```
+
+> --tensor-parallel-size 2
+> --`tensor-parallel-size 2`表示使用Tensor Parallelism技术来分配模型跨两个GPU
+> Tensor Parallelism是一种分布式深度学习技术，用于处理大型模型。
+> 当--tensor-parallel-size 设置为 2 时，模型的参数和计算会被分割成两部分，分别在两个GPU上进行处理。
+> 这种方法可以有效地减少每个GPU上的内存使用，使得能够加载和运行更大的模型。
+> 同时，它还可以在一定程度上提高计算速度，因为多个GPU可以并行处理模型的不同部分。
+> Tensor Parallelism对于大型语言模型（如 Qwen2.5-14B-Instruct）特别有用，因为这些模型通常太大，无法完全加载到单个GPU的内存中。
+
+
+运行：
+
+```
+bash scripts/vllm_serve.sh /code/All-In-One/qbw/EasyR1-20250410/cache/output/agiqa3k_qual_n16_continuous-thres0p75_format0p1_on-policy_newcode_20250616/global_step_144/actor/huggingface agiqa3k_qual_n16_continuous-thres0p75_format0p1_on-policy_newcode_20250616_step144
+```
 # 踩坑记录
 
 ## Ray CPU OOM
