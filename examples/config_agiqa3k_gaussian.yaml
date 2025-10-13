@@ -81,6 +81,7 @@ worker:
       format_weight: 0.1
       r_min: 0.05
       diff_at_rmin: 1.0
+      use_floor: true
 
 trainer:
   total_episodes: 10
