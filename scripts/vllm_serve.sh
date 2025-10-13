@@ -3,8 +3,7 @@ MODEL_NAME=$2
 
 vllm serve $CKPT_PATH \
   --served-model-name $MODEL_NAME \
-  --enable-auto-tool-choice \
-  --tool-call-parser hermes \
+  --chat-template scripts/think_chat_template.jina \
   --max-model-len 8192 \
   --tensor-parallel-size 4 \
   --port 8000 \

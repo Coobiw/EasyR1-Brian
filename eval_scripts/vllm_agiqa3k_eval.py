@@ -10,17 +10,15 @@
 """
 
 import os
+import io
 import argparse
 import json
 from pathlib import Path
 from tqdm import tqdm
 
-# - from openai import OpenAI
-# + from openai import OpenAI, AsyncOpenAI
 from openai import OpenAI, AsyncOpenAI
 
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-from qwen_vl_utils import process_vision_info
+from datasets import load_dataset
 
 import torch
 from torch.utils.data import Dataset
@@ -29,6 +27,9 @@ import random
 import numpy as np
 import base64
 import asyncio   # + 新增
+
+from scipy import stats
+from scipy.optimize import curve_fit
 
 # ----------- 随机种子 ---------------------------------------------------------
 def set_seed(seed):
@@ -41,49 +42,57 @@ def set_seed(seed):
 
 set_seed(42)
 
-# ----------- 工具函数 ---------------------------------------------------------
-def img_path2url(image_path):
-    """本地图片 -> base64 data url（统一放到外层，避免 Dataset 里多次定义）"""
-    with open(image_path, "rb") as f:
-        encoded_image = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:image;base64,{encoded_image}"
 
-# ----------- 数据集 -----------------------------------------------------------
-class AGIQA3k(Dataset):
-    def __init__(self, annos, sys_prompt, query_format):
-        super().__init__()
-        self.annos = []
-        with open(annos) as f:
-            for line in f:
-                item = json.loads(line.strip())
-                self.annos.append(item)
-        self.sys_prompt = sys_prompt
-        self.user_query_format = query_format
+def logistic_func(X, bayta1, bayta2, bayta3, bayta4):
+    logisticPart = 1 + np.exp(np.negative(np.divide(X - bayta3, np.abs(bayta4))))
+    yhat = bayta2 + np.divide(bayta1 - bayta2, logisticPart)
+    return yhat
 
-    def __len__(self):
-        return len(self.annos)
+def fit_function(y_label, y_output):
+    beta = [np.max(y_label), np.min(y_label), np.mean(y_output), 0.5]
+    popt, _ = curve_fit(logistic_func, y_output, \
+        y_label, p0=beta, maxfev=100000000)
+    y_output_logistic = logistic_func(y_output, *popt)
+    
+    return y_output_logistic
 
-    def __getitem__(self, idx):
-        # 兼容 list / slice
-        if isinstance(idx, slice):
-            return [self.__getitem__(i) for i in range(*idx.indices(len(self)))]
-        item = self.annos[idx]
-        return {
+
+def performance_fit(y_label, y_output, func_fit=True):
+    if func_fit:
+        y_output_logistic = fit_function(y_label, y_output)
+    else:
+        y_output_logistic = y_output
+    PLCC = stats.pearsonr(y_output_logistic, y_label)[0]
+    SRCC = stats.spearmanr(y_output, y_label)[0]
+
+    return PLCC, SRCC, (PLCC+SRCC) / 2
+
+# ----------- 数据生成器 -------------------------------------------------------
+def agiqa3k_generator(dataset: Dataset, sys_prompt: str):
+    new_dataset = []
+    for data_item in dataset:
+        image = data_item['images'][0] # PIL.Image
+        query = f"{data_item['problem'].replace('<image>', '').strip()} {sys_prompt}"
+        mos_gt = data_item['answer']
+        new_dataset.append({
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": img_path2url(item['image'])},
-                        },
-                        {"type": "text", "text": self.user_query_format + self.sys_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image;base64,{pil2base64(image)}"}}, 
+                        {"type": "text", "text": query}
                     ],
-                },
+                }
             ],
-            "mos_perception": item['mos_perception'],
-            "mos_align": item['mos_align'],
-        }
+            "mos_perception": mos_gt,
+        })
+    return new_dataset
+
+# ----------- 工具函数 ---------------------------------------------------------
+def pil2base64(image):
+    with io.BytesIO() as output:
+        image.save(output, format="PNG")
+        return base64.b64encode(output.getvalue()).decode("utf-8")
 
 # ----------- Async 推理 -------------------------------------------------------
 async def async_single_item_infer(
@@ -129,36 +138,14 @@ async def main():
     annos = "/code/All-In-One/qbw/EasyR1-20250410/cache/data/AGIQA-3k/annos/test.jsonl"
     # ...（下方 prompt 构造逻辑保持不变，略）...
 
-    if args.rl_prompt:
-        sys_prompt = (
-            "A conversation between User and Assistant. "
-            "The user asks a question, and the Assistant solves it. "
-            "The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. "
-            "The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, "
-            "respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>"
-        )
-        return_dtype, lower_bound, upper_bound = "float", "1", "5"
-        mid_prompt = " rounded to two decimal places,"
-        query_format = (
-            "What is your overall rating on the quality of this AI-generated picture?"
-            f" The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt}"
-            f" with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality."
-            " Return the final answer like: <answer> the score </answer>\n\n"
-        )
-    else:
-        sys_prompt = ""
-        return_dtype, lower_bound, upper_bound = "float", "1", "5"
-        mid_prompt = " rounded to two decimal places,"
-        query_format = (
-            "What is your overall rating on the quality of this AI-generated picture?"
-            f" The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt}"
-            f" with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality."
-            " Return the final answer directly.\n\n"
-        )
+    sys_prompt = "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>"
 
-    dataset = AGIQA3k(annos, sys_prompt, query_format)
+    dataset = load_dataset("Coobiw/agiqa3k_finale_1013")['test']
+    new_dataset = agiqa3k_generator(dataset, sys_prompt)
+    del dataset
+    
     eval_bs = 512  # 一次读多少条进入内存
-    indices = list(range(0, len(dataset), eval_bs))
+    indices = list(range(0, len(new_dataset), eval_bs))
     openai_api_base = f"http://localhost:{args.model_port}/v1"
 
     # + 使用 AsyncOpenAI
@@ -166,13 +153,12 @@ async def main():
     semaphore = asyncio.Semaphore(args.concurrency)
 
     output, output_fname = [], Path(
-        f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k_vllm/"
-        f"{args.model_name}_{return_dtype}_{lower_bound}_{upper_bound}.json"
+        f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k_vllm/{args.model_name}/rollout_results.json"
     )
     output_fname.parent.mkdir(parents=True, exist_ok=True)
 
     for start_idx in tqdm(indices, desc="Batches"):
-        batch = dataset[start_idx : start_idx + eval_bs]
+        batch = new_dataset[start_idx : start_idx + eval_bs]
         # + 真正的并发推理
         responses = await async_infer_batch(
             client, batch, args.model_name, semaphore
@@ -184,6 +170,44 @@ async def main():
     with open(output_fname, "w") as fo:
         json.dump(output, fo, ensure_ascii=False, indent=4)
     print(f"✅ 推理完毕，结果已保存到 {output_fname}")
+    
+    y_label, y_out = [], []
+    error_count = 0
+    for i, item in enumerate(output):
+        model_response = item['model_response']
+        try:
+            answer_start = model_response.find("<answer>")
+            answer_end = model_response.find("</answer>", answer_start + len("<answer>"))
+            if answer_end == -1:
+                if answer_start == -1:
+                    model_response = model_response
+                else:
+                    model_response = model_response[answer_start+len("<answer>") : ]
+            else:
+                model_response = model_response[answer_start+len("<answer>") : answer_end]
+                
+            out = float(model_response.strip())
+            y_out.append(out)
+            y_label.append(float(item['mos_perception']))
+        except Exception as e:
+            error_count += 1
+            print(f"{i}th error:\t", e)
+            
+    print(error_count)
+    output1 = performance_fit(y_label, y_out, func_fit=True)
+    output2 = performance_fit(y_label, y_out, func_fit=False)
+
+    print(output1)
+    print(output2)
+    
+    out_score = os.path.join(output_fname.parent, "score.txt")
+    with open(out_score, 'w') as fo:
+        fo.write(f"PLCC: {output1[0]}\n")
+        fo.write(f"SRCC: {output1[1]}\n")
+        fo.write(f"MainScore: {output1[2]}\n")
+        fo.write(f"PLCC: {output2[0]}\n")
+        fo.write(f"SRCC: {output2[1]}\n")
+        fo.write(f"MainScore: {output2[2]}\n")
 
 if __name__ == "__main__":
     # + 将整个流程丢给 asyncio 运行

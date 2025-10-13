@@ -29,7 +29,6 @@ import random
 import numpy as np
 import base64
 import asyncio   # + 新增
-import re
 
 # ----------- 随机种子 ---------------------------------------------------------
 def set_seed(seed):
@@ -48,16 +47,6 @@ def img_path2url(image_path):
     with open(image_path, "rb") as f:
         encoded_image = base64.b64encode(f.read()).decode("utf-8")
     return f"data:image;base64,{encoded_image}"
-
-def extract_float_from_answer(text):
-    """从 <answer>...</answer> 标签中提取 float，如果失败返回 None"""
-    match = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL)
-    if match:
-        try:
-            return float(match.group(1).strip())
-        except Exception:
-            return None
-    return None
 
 # ----------- 数据集 -----------------------------------------------------------
 class AGIQA3k(Dataset):
@@ -94,6 +83,7 @@ class AGIQA3k(Dataset):
             ],
             "mos_perception": item['mos_perception'],
             "mos_align": item['mos_align'],
+            "image_path": item['image'],
         }
 
 # ----------- Async 推理 -------------------------------------------------------
@@ -101,36 +91,38 @@ async def async_single_item_infer(
     client: AsyncOpenAI,
     item: dict,
     model_name: str,
-    temperature: float = 0.0,
-    n: int = 1,
 ):
     """单条异步推理"""
     resp = await client.chat.completions.create(
         model=model_name,
         messages=item["messages"],
-        temperature=temperature,
+        temperature=1.0,
         max_tokens=4096,
-        n=n,
     )
-    return ["<think>" + choice.message.content for choice in resp.choices]
+    return "<think>" + resp.choices[0].message.content
 
 async def async_infer_batch(
     client: AsyncOpenAI,
     batch_items: list,
     model_name: str,
     semaphore: asyncio.Semaphore,
-    temperature: float = 0.0,
-    n: int = 1,
+    pbar=None,
 ):
-    """一个 batch 内部并发推理；使用 semaphore 控制全局并发上限。每条数据预测 n 次，返回 n 个结果"""
-    async with semaphore:
-        tasks = [
-            asyncio.create_task(
-                async_single_item_infer(client, item, model_name, temperature=temperature, n=n)
-            )
-            for item in batch_items
-        ]
-        return await asyncio.gather(*tasks)
+    """一个 batch 内部并发推理；使用 semaphore 控制全局并发上限"""
+    async def single_infer_with_progress(item):
+        async with semaphore:  # 将 semaphore 移到单个请求级别
+            result = await async_single_item_infer(client, item, model_name)
+            if pbar:
+                pbar.update(1)
+            return result
+            
+    tasks = [
+        asyncio.create_task(
+            single_infer_with_progress(item)
+        )
+        for item in batch_items
+    ]
+    return await asyncio.gather(*tasks)
 
 # ----------- 主入口 -----------------------------------------------------------
 async def main():
@@ -140,9 +132,10 @@ async def main():
     parser.add_argument("--rl_prompt", type=int, default=1, choices=[0, 1])
     
     parser.add_argument("--concurrency", type=int, default=64, help="并发请求数")
+    parser.add_argument("--rollout_times", type=int, default=4, help="每条数据的rollout次数")
     args = parser.parse_args()
 
-    annos = "/code/All-In-One/qbw/EasyR1-20250410/cache/data/AGIQA-3k/annos/test.jsonl"
+    annos = "/code/All-In-One/qbw/EasyR1-20250410/cache/data/AGIQA-3k/annos/train.jsonl"
     # ...（下方 prompt 构造逻辑保持不变，略）...
 
     if args.rl_prompt:
@@ -173,33 +166,36 @@ async def main():
         )
 
     dataset = AGIQA3k(annos, sys_prompt, query_format)
-    eval_bs = 512  # 一次读多少条进入内存
-    indices = list(range(0, len(dataset), eval_bs))
     openai_api_base = f"http://localhost:{args.model_port}/v1"
 
     # + 使用 AsyncOpenAI
     client = AsyncOpenAI(api_key="EMPTY", base_url=openai_api_base)
     semaphore = asyncio.Semaphore(args.concurrency)
 
-    n_vote = 8
     output, output_fname = [], Path(
-        f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k_vllm_voting/"
-        f"{args.model_name}_voting{n_vote}_{return_dtype}_{lower_bound}_{upper_bound}_think-chat-template.json"
+        f"/code/All-In-One/qbw/EasyR1-20250410/rollout_results/agiqa3k_rollout_temp1/"
+        f"{args.model_name}_roll{args.rollout_times}_{return_dtype}_{lower_bound}_{upper_bound}.json"
     )
     output_fname.parent.mkdir(parents=True, exist_ok=True)
 
-    for start_idx in tqdm(indices, desc="Batches"):
-        batch = dataset[start_idx : start_idx + eval_bs]
-        # + 8次投票，温度为1
-        responses_list = await async_infer_batch(
-            client, batch, args.model_name, semaphore, temperature=1.0, n=n_vote
+    # 获取所有训练数据
+    all_data = []
+    for i in range(len(dataset)):
+        for _ in range(args.rollout_times):
+            all_data.append(dataset[i])
+    
+    print(f"开始并发推理 {len(all_data)} 条数据（{len(dataset)} 条原始数据 × {args.rollout_times} 次rollout），并发数: {args.concurrency}")
+    
+    # 并发发送所有请求，添加进度条
+    with tqdm(total=len(all_data), desc="推理进度") as pbar:
+        responses = await async_infer_batch(
+            client, all_data, args.model_name, semaphore, pbar
         )
-        for item, responses in zip(batch, responses_list):
-            item["model_responses"] = responses
-            float_answers = [extract_float_from_answer(r) for r in responses]
-            float_answers = [f for f in float_answers if f is not None]
-            item["voting_result"] = float(np.mean(float_answers)) if float_answers else None
-            output.append(item)
+    
+    # 处理结果
+    for item, model_resp in zip(all_data, responses):
+        item["model_response"] = model_resp
+        output.append(item)
 
     with open(output_fname, "w") as fo:
         json.dump(output, fo, ensure_ascii=False, indent=4)
