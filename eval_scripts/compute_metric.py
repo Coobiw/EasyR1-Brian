@@ -46,7 +46,8 @@ def main():
     
     out_name = args.out_name
     dir_name = "agiqa-3k_vllm" if args.vllm else "agiqa-3k"
-    output_file = f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/{dir_name}/{out_name}_float_1_5.json"
+    suffix = "think-chat-template" if args.vllm else "newcode-0623"
+    output_file = f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/{dir_name}/{out_name}_float_1_5_{suffix}.json"
 
     y_label, y_out = [], []
     items = json.load(open(output_file))

@@ -65,7 +65,6 @@ def model_gen(model, processor, messages):
         processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True)
         for msg in messages
     ]
-    # import pdb;pdb.set_trace()
     image_inputs, _ = process_vision_info(messages)
     inputs = processor(
         text=texts,
@@ -136,6 +135,9 @@ if __name__ == "__main__":
         # return_dtype, lower_bound, upper_bound  = "int", "1", "100"
         mid_prompt = " rounded to two decimal places," if return_dtype == "float" else ""
         query_format = 'What is your overall rating on the quality of this AI-generated picture?' + f' The rating should be a {return_dtype} between {lower_bound} and {upper_bound},{mid_prompt} with {lower_bound} representing very poor quality and {upper_bound} representing excellent quality. Return the final answer like: <answer> the score </answer>\n\n'
+
+        print("use thinking chat template...")
+        processor.chat_template = json.load(open("scripts/qwen-2-5-vl_chat_template_think.json"))['chat_template']
     else:
         sys_prompt = ''
     
@@ -146,7 +148,7 @@ if __name__ == "__main__":
 
     agiqa_3k = AGIQA3k(annos, sys_prompt, query_format)
     output = []
-    output_fname = f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k/{model_name}_{return_dtype}_{lower_bound}_{upper_bound}.json"
+    output_fname = f"/code/All-In-One/qbw/EasyR1-20250410/eval_results/agiqa-3k/{model_name}_{return_dtype}_{lower_bound}_{upper_bound}_newcode-0623.json"
 
     eval_bs = 128
     indices = list(range(len(agiqa_3k)))[::eval_bs]
@@ -164,7 +166,7 @@ if __name__ == "__main__":
             item = items[response_idx]
             mos_perception = item['mos_perception']
             mos_align = item['mos_align']
-            item['model_response'] = model_response
+            item['model_response'] = "<think>" + model_response if rl_prompt else model_response
             output.append(item)
 
     with open(output_fname, 'w') as fo:
