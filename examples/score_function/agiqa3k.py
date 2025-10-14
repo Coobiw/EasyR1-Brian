@@ -1,5 +1,6 @@
 import re
 from typing import Dict
+import math
 
 def grade_answer(pred, gt, threshold):
     # print("threshold:\t", threshold)
@@ -16,26 +17,28 @@ def grade_answer_continuous(pred, gt, threshold):
 def grade_answer_gaussian(
     pred,
     gt,
-    r_min=0.05,  # 奖励地板；“diff=1”处的目标值也就是 r_min
-    diff_at_rmin=1.0,   # 在“相差多少分”时把奖励压到 r_min；默认 1 分
-    use_floor=True,     # 是否启用地板裁剪
-):
-    # 归一误差到[0,1], gt score在[1,5]
-    d = (y_hat - y).abs() / 4.0
-    # 归一阈值 d0
+    r_min: float = 0.05,     # 在 diff=1 处的目标最小奖励
+    diff_at_rmin: float = 1.0,  # “相差多少分”时衰减到 r_min（原始分值尺度）
+    use_floor: bool = True,
+) -> float:
+    # 归一误差到[0,1]，gt/pred在[1,5]
+    d = abs(float(pred) - float(gt)) / 4.0
     d0 = diff_at_rmin / 4.0
-    # 防数值问题
-    r_min_clamped = float(max(min(r_min, 0.999999), 1e-6))
-    # 由 r(d0)=r_min 反推 sigma
+
+    # 数值保护
+    r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
+
+    # 由 r(d0)=r_min 反推 sigma（高斯）
     sigma = d0 / math.sqrt(2.0 * math.log(1.0 / r_min_clamped))
-    # 高斯衰减
-    r = torch.exp(- (d ** 2) / (2.0 * sigma ** 2))
 
-    # 地板（避免稀疏/组内全零）
+    # 高斯衰减（标量）
+    r = math.exp(- (d ** 2) / (2.0 * sigma ** 2))
+
+    # 地板（避免稀疏）
     if use_floor:
-        r = torch.clamp(r, min=r_min_clamped)
+        r = max(r, r_min_clamped)
 
-    return r
+    return float(r)
             
 
 
@@ -121,7 +124,7 @@ def compute_score_gaussian(
     use_floor=True,     # 是否启用地板裁剪
 )-> Dict[str, float]:
     format_score = format_reward(predict_str)
-    accuracy_score = accuracy_reward_continuous(predict_str, ground_truth, r_min, diff_at_rmin, use_floor)
+    accuracy_score = accuracy_reward_gaussian(predict_str, ground_truth, r_min, diff_at_rmin, use_floor)
     return {
         "overall": (1 - format_weight) * accuracy_score + format_weight * format_score,
         "format": format_score,
