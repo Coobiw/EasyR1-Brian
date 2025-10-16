@@ -16,6 +16,7 @@ FSDP PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
+import json
 import os
 import uuid
 from collections import defaultdict
@@ -45,7 +46,7 @@ from ..utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_
 from ..workers.fsdp_workers import FSDPWorker
 from . import core_algos
 from .config import PPOConfig
-from .metrics import compute_data_metrics, compute_throughout_metrics, compute_timing_metrics, reduce_metrics
+from .metrics import compute_data_metrics, compute_throughout_metrics, compute_timing_metrics, reduce_metrics, quality_assessment_metrics
 
 
 class Role(IntEnum):
@@ -110,6 +111,37 @@ class ResourcePoolManager:
         gpus_required = self.get_num_gpus()
         if gpus_available < gpus_required:
             raise ValueError(f"Total available GPUs {gpus_available} is less than total desired GPUs {gpus_required}.")
+
+
+def extract_answer_from_response(response: str) -> Optional[float]:
+    """
+    Extract numeric answer from model response.
+    Looks for content between <answer> and </answer> tags.
+    
+    Args:
+        response: Model generated response string
+        
+    Returns:
+        Extracted float value or None if extraction fails
+    """
+    try:
+        answer_start = response.find("<answer>")
+        answer_end = response.find("</answer>", answer_start + len("<answer>"))
+        
+        if answer_end == -1:
+            if answer_start == -1:
+                # No tags found, try to parse the whole response
+                answer_text = response
+            else:
+                # Only start tag found, take everything after it
+                answer_text = response[answer_start + len("<answer>"):]
+        else:
+            # Both tags found, extract content between them
+            answer_text = response[answer_start + len("<answer>"):answer_end]
+        
+        return float(answer_text.strip())
+    except Exception:
+        return None
 
 
 def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.KLController, kl_penalty="kl"):
@@ -261,6 +293,9 @@ class RayPPOTrainer:
         config.worker.actor.optim.training_steps = self.training_steps
         config.worker.critic.optim.training_steps = self.training_steps
         print(f"Total training steps: {self.training_steps}")
+        
+        # Initialize best main_score for checkpoint tracking
+        self.best_main_score = -float('inf')
 
     def _maybe_log_val_generations(
         self, inputs: List[str], outputs: List[str], labels: List[str], scores: List[float]
@@ -285,6 +320,10 @@ class RayPPOTrainer:
         # Lists to collect samples for the table
         sample_inputs, sample_outputs, sample_labels, sample_scores = [], [], [], []
         reward_metrics_lst = defaultdict(list)
+        # Lists to collect all predictions and ground truth for PLCC/SRCC calculation
+        y_out, y_label = [], []
+        error_count = 0
+        
         for batch_dict in self.val_dataloader:
             test_batch = DataProto.from_single_dict(batch_dict)
             # Store original inputs
@@ -313,7 +352,20 @@ class RayPPOTrainer:
             output_ids = test_output_gen_batch.batch["responses"]
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
             sample_outputs.extend(output_texts)
-            sample_labels.extend(test_batch.non_tensor_batch["ground_truth"].tolist())
+            
+            # Get ground truth labels
+            ground_truth_batch = test_batch.non_tensor_batch["ground_truth"].tolist()
+            sample_labels.extend(ground_truth_batch)
+            
+            # Extract predictions from output texts for PLCC/SRCC calculation
+            for output_text, gt in zip(output_texts, ground_truth_batch):
+                pred = extract_answer_from_response(output_text)
+                if pred is not None:
+                    y_out.append(pred)
+                    y_label.append(float(gt))
+                else:
+                    error_count += 1
+            
             test_batch = test_batch.union(test_output_gen_batch)
 
             # evaluate using reward_function
@@ -330,7 +382,27 @@ class RayPPOTrainer:
         self._maybe_log_val_generations(sample_inputs, sample_outputs, sample_labels, sample_scores)
         reward_score = torch.cat(reward_tensor_lst, dim=0).sum(-1).mean().item()
         val_reward_metrics = {f"val/{key}_reward": value for key, value in reduce_metrics(reward_metrics_lst).items()}
-        return {"val/reward_score": reward_score, **val_reward_metrics}
+        
+        # Calculate AGIQA-3K metrics (PLCC, SRCC) if we have valid predictions
+        agiqa_metrics = {
+            "val/extraction_answer_error": error_count,
+        }
+        if len(y_out) > 0 and len(y_label) > 0:
+            print(f"Computing AGIQA-3K metrics on {len(y_out)} valid samples (errors: {error_count})")
+            
+            # Compute quality assessment metrics
+            plcc, srcc, main_score = quality_assessment_metrics(y_out, y_label)
+            agiqa_metrics.update({
+                "val/plcc": plcc,
+                "val/srcc": srcc,
+                "val/main_score": main_score,
+            })
+            
+            print(f"AGIQA-3K Metrics: PLCC={plcc:.4f}, SRCC={srcc:.4f}, MainScore={main_score:.4f}")
+        else:
+            print(f"Warning: No valid predictions extracted for AGIQA-3K metrics (errors: {error_count})")
+        
+        return {"val/reward_score": reward_score, **val_reward_metrics, **agiqa_metrics}
 
     def init_workers(self) -> None:
         """Init resource pool and worker group"""
@@ -422,6 +494,47 @@ class RayPPOTrainer:
         last_global_step_path = os.path.join(self.config.trainer.save_checkpoint_path, CHECKPOINT_TRACKER)
         with open(last_global_step_path, "w") as f:
             f.write(str(self.global_step))
+
+    def _save_best_checkpoint(self, main_score: float) -> None:
+        """
+        Save best checkpoint based on main_score.
+        The best checkpoint will be saved to {save_checkpoint_path}/best_ckpt/
+        and will be overwritten when a better score is achieved.
+        
+        Args:
+            main_score: The main evaluation score to track
+        """
+        if main_score <= self.best_main_score:
+            return
+        
+        # Update best score
+        old_best = self.best_main_score
+        self.best_main_score = main_score
+        print(f"🎉 New best main_score: {main_score:.4f} (previous: {old_best:.4f}) at step {self.global_step}")
+        
+        # Save to best_ckpt directory
+        best_folder_path = os.path.join(self.config.trainer.save_checkpoint_path, "best_ckpt")
+        actor_path = os.path.join(best_folder_path, "actor")
+        self.actor_rollout_wg.save_checkpoint(actor_path)
+        
+        if self.use_critic:
+            critic_path = os.path.join(best_folder_path, "critic")
+            self.critic_wg.save_checkpoint(critic_path)
+        
+        dataloader_path = os.path.join(best_folder_path, "dataloader.pt")
+        dataloader_state_dict = self.train_dataloader.state_dict()
+        torch.save(dataloader_state_dict, dataloader_path)
+        
+        # Save metadata about the best checkpoint
+        metadata_path = os.path.join(best_folder_path, "best_metadata.json")
+        metadata = {
+            "global_step": self.global_step,
+            "main_score": main_score,
+        }
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+        
+        print(f"✅ Best checkpoint saved to {best_folder_path}")
 
     def _load_checkpoint(self) -> None:
         if self.config.trainer.load_checkpoint_path is None:
@@ -615,6 +728,10 @@ class RayPPOTrainer:
                             val_metrics = self._validate()
 
                         metrics.update(val_metrics)
+                        
+                        # Save best checkpoint if main_score improved
+                        if "val/main_score" in val_metrics:
+                            self._save_best_checkpoint(val_metrics["val/main_score"])
 
                     if self.config.trainer.save_freq > 0 and self.global_step % self.config.trainer.save_freq == 0:
                         with _timer("save_checkpoint", timing_raw):
@@ -637,8 +754,13 @@ class RayPPOTrainer:
             ):
                 val_metrics = self._validate()
                 self.logger.log(data=val_metrics, step=self.global_step)
+                
+                # Save best checkpoint if main_score improved
+                if "val/main_score" in val_metrics:
+                    self._save_best_checkpoint(val_metrics["val/main_score"])
 
             print(f"Final validation metrics: {convert_dict_to_str(val_metrics)}")
+            print(f"Best main_score achieved: {self.best_main_score:.4f}")
 
         if self.config.trainer.save_freq <= 0 or self.global_step % self.config.trainer.save_freq != 0:
             self._save_checkpoint()
