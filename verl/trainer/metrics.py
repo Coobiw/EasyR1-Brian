@@ -16,10 +16,39 @@ from typing import Any, Dict, List
 
 import numpy as np
 import torch
+from scipy import stats
+from scipy.optimize import curve_fit
 
 from ..protocol import DataProto
 
+def logistic_func(X, bayta1, bayta2, bayta3, bayta4):
+    logisticPart = 1 + np.exp(np.negative(np.divide(X - bayta3, np.abs(bayta4))))
+    yhat = bayta2 + np.divide(bayta1 - bayta2, logisticPart)
+    return yhat
 
+def fit_function(y_label, y_output):
+    beta = [np.max(y_label), np.min(y_label), np.mean(y_output), 0.5]
+    popt, _ = curve_fit(logistic_func, y_output, \
+        y_label, p0=beta, maxfev=100000000)
+    y_output_logistic = logistic_func(y_output, *popt)
+    
+    return y_output_logistic
+
+
+def performance_fit(y_label, y_output, func_fit=True):
+    if func_fit:
+        y_output_logistic = fit_function(y_label, y_output)
+    else:
+        y_output_logistic = y_output
+    PLCC = stats.pearsonr(y_output_logistic, y_label)[0]
+    SRCC = stats.spearmanr(y_output, y_label)[0]
+
+    return PLCC, SRCC, (PLCC+SRCC) / 2
+
+def quality_assessment_metrics(y_out: List[str], y_label: List[str]):
+    plcc, srcc, main_score = performance_fit(y_label, y_out, func_fit=True)
+    return plcc, srcc, main_score
+    
 def reduce_metrics(metrics: Dict[str, List[Any]]) -> Dict[str, Any]:
     return {key: np.mean(value) for key, value in metrics.items()}
 
