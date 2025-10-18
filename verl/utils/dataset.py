@@ -167,6 +167,8 @@ class RLHFDataset(Dataset, ImageProcessMixin):
             prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
             # Debug: print prompt to verify chat template (only for first example)
             if not hasattr(self, '_debug_printed'):
+                if hasattr(self.processor, 'chat_template') and self.processor.chat_template:
+                    print(f"[DEBUG] Processor.chat_template ends with: ...{self.processor.chat_template[-80:]}")
                 print(f"\n{'='*80}\n[DEBUG] Generated prompt:\n{prompt}\n{'='*80}\n")
                 self._debug_printed = True
             images = [self.process_image(image) for image in example.pop(self.image_key)]

@@ -53,15 +53,16 @@ class Runner:
             try:
                 with open(think_template_path, "r") as f:
                     custom_chat_template = f.read()
-                # Set to both tokenizer and processor (processor uses tokenizer internally)
+                
+                # Set to tokenizer
                 tokenizer.chat_template = custom_chat_template
+                print(f"✓ Applied think chat template to tokenizer")
+                
+                # For processor, set directly on processor.chat_template (like eval_scripts/agiqa3k_eval.py:140)
                 if processor is not None:
-                    processor.tokenizer.chat_template = custom_chat_template
-                print(f"✓ Applied think chat template from: {think_template_path}")
-                print(f"✓ Chat template ends with: ...{custom_chat_template[-100:]}")
-                # Verify it's set correctly
-                if processor is not None:
-                    print(f"✓ Processor tokenizer chat template ends with: ...{processor.tokenizer.chat_template[-100:]}")
+                    processor.chat_template = custom_chat_template
+                    print(f"✓ Set chat template on processor directly")
+                    print(f"✓ Chat template ends with: ...{custom_chat_template[-80:]}")
             except Exception as e:
                 print(f"✗ Warning: Failed to load think chat template from {think_template_path}: {e}")
 
