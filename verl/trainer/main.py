@@ -57,9 +57,13 @@ class Runner:
                 tokenizer.chat_template = custom_chat_template
                 if processor is not None:
                     processor.tokenizer.chat_template = custom_chat_template
-                print(f"Applied think chat template from: {think_template_path}")
+                print(f"✓ Applied think chat template from: {think_template_path}")
+                print(f"✓ Chat template ends with: ...{custom_chat_template[-100:]}")
+                # Verify it's set correctly
+                if processor is not None:
+                    print(f"✓ Processor tokenizer chat template ends with: ...{processor.tokenizer.chat_template[-100:]}")
             except Exception as e:
-                print(f"Warning: Failed to load think chat template from {think_template_path}: {e}")
+                print(f"✗ Warning: Failed to load think chat template from {think_template_path}: {e}")
 
         # define worker classes
         ray_worker_group_cls = RayWorkerGroup
