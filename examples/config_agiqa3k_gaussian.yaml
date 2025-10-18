@@ -62,6 +62,7 @@ worker:
     enable_chunked_prefill: false
     tensor_parallel_size: 2
     limit_images: 0
+    chat_template: scripts/think_chat_template.jina  # 自定义 chat template，和 vllm serve --chat-template 一样
     val_override_config:
       temperature: 0
       n: 1
