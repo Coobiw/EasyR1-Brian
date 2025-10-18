@@ -70,6 +70,8 @@ class AdvantageEstimator(str, Enum):
 
     GAE = "gae"
     GRPO = "grpo"
+    WO_GRPO = "wo_grpo"  # Winner-Only GRPO: winner gets advantage=1, others 0
+    WO_GRPO_PP = "wo_grpo_pp"  # Winner-Only GRPO++: winner uses original GRPO advantage, others 0
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
     RLOO = "rloo"
@@ -175,6 +177,24 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         )
     elif adv_estimator == AdvantageEstimator.GRPO:
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards, response_mask, index)
+    elif adv_estimator == AdvantageEstimator.WO_GRPO:
+        # Winner-Only GRPO: winner gets advantage=1, others get 0, if all the advantages are 0 / 1, use original GRPO advantages
+        advantages_wo, returns, advantages_original = core_algos.compute_wo_grpo_outcome_advantage(
+            token_level_rewards, response_mask, index
+        )
+        # Use winner-only advantages for training (stored in 'advantages')
+        advantages = advantages_wo
+        # Store original GRPO advantages for metrics comparison with other jobs
+        data.batch["advantages_original"] = advantages_original
+    elif adv_estimator == AdvantageEstimator.WO_GRPO_PP:
+        # Winner-Only GRPO++: winner uses its original GRPO advantage value, others get 0
+        advantages_wo_pp, returns, advantages_original = core_algos.compute_wo_grpo_pp_outcome_advantage(
+            token_level_rewards, response_mask, index
+        )
+        # Use WO-GRPO++ advantages for training (stored in 'advantages')
+        advantages = advantages_wo_pp
+        # Store original GRPO advantages for metrics comparison with other jobs
+        data.batch["advantages_original"] = advantages_original
     elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS:
         advantages, returns = core_algos.compute_reinforce_plus_plus_outcome_advantage(
             token_level_rewards, response_mask, gamma
@@ -280,10 +300,10 @@ class RayPPOTrainer:
                 )
 
         if (
-            config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.RLOO)
+            config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.WO_GRPO, AdvantageEstimator.WO_GRPO_PP, AdvantageEstimator.RLOO)
             and config.worker.rollout.n == 1
         ):
-            raise ValueError("GRPO and RLOO algorithm need `config.worker.rollout.n > 1`.")
+            raise ValueError("GRPO, WO-GRPO, WO-GRPO++ and RLOO algorithm need `config.worker.rollout.n > 1`.")
 
         if config.trainer.max_steps is not None:
             self.training_steps = config.trainer.max_steps

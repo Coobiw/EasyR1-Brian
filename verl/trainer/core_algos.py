@@ -176,6 +176,164 @@ def compute_grpo_outcome_advantage(
 
 
 @torch.no_grad()
+def compute_wo_grpo_pp_outcome_advantage(
+    token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Compute advantage for Winner-Only GRPO++ (WO-GRPO++).
+    Only the sample(s) with the highest score in each group use their original GRPO advantages, others get 0.
+    This encourages the model to focus on learning from the best sample(s) with proper gradient scaling.
+
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape: (bs, response_length)
+        response_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+        index: `(torch.Tensor)`
+            Group index for each sample
+
+    Returns:
+        advantages_wo_pp: `(torch.Tensor)`
+            shape: (bs, response_length) - winner-only advantages (winner's GRPO adv, others 0)
+        returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+        advantages_original: `(torch.Tensor)`
+            shape: (bs, response_length) - original GRPO advantages for metrics
+
+    """
+    # First compute the original GRPO advantages for statistics
+    scores = token_level_rewards.sum(dim=-1)
+    id2score = defaultdict(list)
+    id2idx_list = defaultdict(list)  # Track indices for each group
+    id2mean, id2std = {}, {}
+
+    bsz = scores.shape[0]
+    for i in range(bsz):
+        id2score[index[i]].append(scores[i])
+        id2idx_list[index[i]].append(i)
+
+    for idx in id2score:
+        assert len(id2score[idx]) > 1, "WO-GRPO++ needs rollout.n > 1."
+        id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+        id2std[idx] = torch.std(torch.tensor(id2score[idx]))
+
+    # Compute original GRPO advantages (normalized scores)
+    original_scores = scores.clone()
+    for i in range(bsz):
+        original_scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
+
+    advantages_original = original_scores.unsqueeze(-1) * response_mask
+
+    # Compute winner-only advantages
+    # For each group, find ALL winners (all samples with highest score) and use their GRPO advantages, others get 0
+    # However, if all samples in a group have the same score (std ≈ 0), keep original advantages
+    winner_advantages = torch.zeros_like(scores)
+    
+    for idx in id2score:
+        group_indices = id2idx_list[idx]
+        group_scores = torch.tensor([scores[i] for i in group_indices])
+        
+        # Check if all scores in the group are the same (std ≈ 0)
+        if id2std[idx] < eps:
+            # All samples have same score, keep their original GRPO advantages
+            for i in group_indices:
+                winner_advantages[i] = original_scores[i]
+        else:
+            # Find ALL winners (all samples with the highest score in the group)
+            max_score = torch.max(group_scores)
+            winner_mask = (group_scores == max_score)  # Boolean mask for all winners
+            
+            # Set all winners' advantages to their original GRPO advantage values
+            for local_idx, is_winner in enumerate(winner_mask):
+                if is_winner:
+                    global_idx = group_indices[local_idx]
+                    winner_advantages[global_idx] = original_scores[global_idx]
+
+    returns_wo = winner_advantages.unsqueeze(-1) * response_mask
+    
+    return returns_wo, returns_wo, advantages_original
+
+
+@torch.no_grad()
+def compute_wo_grpo_outcome_advantage(
+    token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Compute advantage for Winner-Only GRPO (WO-GRPO).
+    Only the sample(s) with the highest score in each group get advantage=1, others get 0.
+    This is a simpler version that treats all winners equally regardless of their advantage magnitude.
+
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape: (bs, response_length)
+        response_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+        index: `(torch.Tensor)`
+            Group index for each sample
+
+    Returns:
+        advantages_wo: `(torch.Tensor)`
+            shape: (bs, response_length) - WO-GRPO advantages (winner=1, others=0)
+        returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+        advantages_original: `(torch.Tensor)`
+            shape: (bs, response_length) - original GRPO advantages for metrics
+
+    """
+    # First compute the original GRPO advantages for statistics
+    scores = token_level_rewards.sum(dim=-1)
+    id2score = defaultdict(list)
+    id2idx_list = defaultdict(list)  # Track indices for each group
+    id2mean, id2std = {}, {}
+
+    bsz = scores.shape[0]
+    for i in range(bsz):
+        id2score[index[i]].append(scores[i])
+        id2idx_list[index[i]].append(i)
+
+    for idx in id2score:
+        assert len(id2score[idx]) > 1, "WO-GRPO needs rollout.n > 1."
+        id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+        id2std[idx] = torch.std(torch.tensor(id2score[idx]))
+
+    # Compute original GRPO advantages (normalized scores)
+    original_scores = scores.clone()
+    for i in range(bsz):
+        original_scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
+
+    advantages_original = original_scores.unsqueeze(-1) * response_mask
+
+    # Compute WO-GRPO advantages
+    # For each group, find ALL winners (all samples with highest score) and set their advantages to 1, others to 0
+    # However, if all samples in a group have the same score (std ≈ 0), keep original advantages
+    wo_advantages = torch.zeros_like(scores)
+    
+    for idx in id2score:
+        group_indices = id2idx_list[idx]
+        group_scores = torch.tensor([scores[i] for i in group_indices])
+        
+        # Check if all scores in the group are the same (std ≈ 0)
+        if id2std[idx] < eps:
+            # All samples have same score, keep their original GRPO advantages
+            for i in group_indices:
+                wo_advantages[i] = original_scores[i]
+        else:
+            # Find ALL winners (all samples with the highest score in the group)
+            max_score = torch.max(group_scores)
+            winner_mask = (group_scores == max_score)  # Boolean mask for all winners
+            
+            # Set all winners' advantages to 1
+            for local_idx, is_winner in enumerate(winner_mask):
+                if is_winner:
+                    global_idx = group_indices[local_idx]
+                    wo_advantages[global_idx] = 1.0
+
+    returns_wo = wo_advantages.unsqueeze(-1) * response_mask
+    
+    return returns_wo, returns_wo, advantages_original
+
+
+@torch.no_grad()
 def compute_rloo_outcome_advantage(
     token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
