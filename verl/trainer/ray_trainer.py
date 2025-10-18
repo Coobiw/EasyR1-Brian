@@ -348,7 +348,7 @@ class RayPPOTrainer:
             test_batch = DataProto.from_single_dict(batch_dict)
             # Store original inputs
             input_ids = test_batch.batch["input_ids"]
-            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=False) for ids in input_ids]
+            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
             sample_inputs.extend(input_texts)
 
             if "multi_modal_data" in test_batch.non_tensor_batch.keys():
