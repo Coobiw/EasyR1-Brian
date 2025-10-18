@@ -87,18 +87,6 @@ class vLLMRollout(BaseRollout):
             enable_sleep_mode=True,
         )
 
-        # Apply custom chat template if provided (like vllm serve --chat-template)
-        if config.chat_template is not None:
-            try:
-                with open(config.chat_template, "r") as f:
-                    custom_chat_template = f.read()
-                # Set chat template to the tokenizer (same as vllm serve does)
-                vllm_tokenizer = self.inference_engine.llm_engine.tokenizer
-                vllm_tokenizer.tokenizer.chat_template = custom_chat_template
-                print(f"Applied custom chat template from: {config.chat_template}")
-            except Exception as e:
-                print(f"Warning: Failed to load chat template from {config.chat_template}: {e}")
-
         # Offload vllm model to reduce peak memory usage
         self.inference_engine.sleep(level=1)
 

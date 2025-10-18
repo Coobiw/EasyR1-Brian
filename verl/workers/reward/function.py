@@ -40,6 +40,7 @@ ScoreFunction = Callable[[str, str], RewardScore]
 class FunctionRewardManager:
     config: RewardConfig
     tokenizer: PreTrainedTokenizer
+    force_think_template: bool = False  # If True, prepend <think> to response strings
 
     def __post_init__(self):
         """Load score function."""
@@ -77,6 +78,11 @@ class FunctionRewardManager:
             response_str = self.tokenizer.decode(
                 valid_response_ids, skip_special_tokens=self.config.skip_special_tokens
             )
+            
+            # If force_think_template is True, prepend <think> to response
+            if self.force_think_template:
+                response_str = "<think>" + response_str
+            
             ground_truth = data_item.non_tensor_batch["ground_truth"]
 
             score = self.score_fn(response_str, ground_truth)
