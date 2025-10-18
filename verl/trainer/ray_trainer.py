@@ -371,15 +371,7 @@ class RayPPOTrainer:
             # Store generated outputs
             output_ids = test_output_gen_batch.batch["responses"]
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
-            
-            # Apply force_think_template preprocessing if needed (for logging consistency)
-            if self.config.worker.rollout.force_think_template:
-                output_texts_for_logging = ["<think>" + text if not text.startswith("<think>") else text 
-                                           for text in output_texts]
-            else:
-                output_texts_for_logging = output_texts
-            
-            sample_outputs.extend(output_texts_for_logging)
+            sample_outputs.extend(output_texts)
             
             # Get ground truth labels
             ground_truth_batch = test_batch.non_tensor_batch["ground_truth"].tolist()
