@@ -371,13 +371,22 @@ class RayPPOTrainer:
             # Store generated outputs
             output_ids = test_output_gen_batch.batch["responses"]
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
-            sample_outputs.extend(output_texts)
+            
+            # Apply force_think_template preprocessing if needed (for logging consistency)
+            if self.config.worker.rollout.force_think_template:
+                output_texts_for_logging = ["<think>" + text if not text.startswith("<think>") else text 
+                                           for text in output_texts]
+            else:
+                output_texts_for_logging = output_texts
+            
+            sample_outputs.extend(output_texts_for_logging)
             
             # Get ground truth labels
             ground_truth_batch = test_batch.non_tensor_batch["ground_truth"].tolist()
             sample_labels.extend(ground_truth_batch)
             
             # Extract predictions from output texts for PLCC/SRCC calculation
+            # Note: extract_answer_from_response doesn't require <think> tag, just <answer> tag
             for output_text, gt in zip(output_texts, ground_truth_batch):
                 pred = extract_answer_from_response(output_text)
                 if pred is not None:

@@ -46,6 +46,20 @@ class Runner:
             trust_remote_code=config.worker.actor.model.trust_remote_code,
             use_fast=True,
         )
+        
+        # Apply think chat template if force_think_template is True
+        if config.worker.rollout.force_think_template:
+            think_template_path = "scripts/think_chat_template.jina"
+            try:
+                with open(think_template_path, "r") as f:
+                    custom_chat_template = f.read()
+                # Set to both tokenizer and processor (processor uses tokenizer internally)
+                tokenizer.chat_template = custom_chat_template
+                if processor is not None:
+                    processor.tokenizer.chat_template = custom_chat_template
+                print(f"Applied think chat template from: {think_template_path}")
+            except Exception as e:
+                print(f"Warning: Failed to load think chat template from {think_template_path}: {e}")
 
         # define worker classes
         ray_worker_group_cls = RayWorkerGroup
@@ -65,8 +79,16 @@ class Runner:
         }
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
-        reward_fn = FunctionRewardManager(config=config.worker.reward, tokenizer=tokenizer)
-        val_reward_fn = FunctionRewardManager(config=config.worker.reward, tokenizer=tokenizer)
+        reward_fn = FunctionRewardManager(
+            config=config.worker.reward,
+            tokenizer=tokenizer,
+            force_think_template=config.worker.rollout.force_think_template,
+        )
+        val_reward_fn = FunctionRewardManager(
+            config=config.worker.reward,
+            tokenizer=tokenizer,
+            force_think_template=config.worker.rollout.force_think_template,
+        )
 
         train_dataloader, val_dataloader = create_dataloader(
             config=config.data, tokenizer=tokenizer, processor=processor

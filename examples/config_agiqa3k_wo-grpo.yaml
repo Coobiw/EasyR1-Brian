@@ -16,7 +16,7 @@ data:
   filter_overlong_prompts: true
 
 algorithm:
-  adv_estimator: grpo
+  adv_estimator: wo_grpo
   disable_kl: false
   use_kl_loss: true
   kl_penalty: low_var_kl
@@ -77,10 +77,12 @@ worker:
 
   reward:
     reward_type: function
-    score_function: ./examples/score_function/agiqa3k.py:compute_score_continuous
+    score_function: ./examples/score_function/agiqa3k.py:compute_score_gaussian
     score_function_kwargs:
       format_weight: 0.1
-      threshold: 0.75
+      r_min: 0.05
+      diff_at_rmin: 1.0
+      use_floor: true
 
 trainer:
   total_episodes: 10
