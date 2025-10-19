@@ -251,6 +251,9 @@ class DataParallelPPOActor(BasePPOActor):
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
+        # For WO-GRPO/WO-GRPO++, also include winner_mask to filter loss computation
+        if "winner_mask" in data.batch:
+            select_keys.append("winner_mask")
 
         if "multi_modal_inputs" in data.non_tensor_batch.keys():
             non_tensor_select_keys = ["multi_modal_inputs"]
@@ -283,6 +286,14 @@ class DataParallelPPOActor(BasePPOActor):
                     response_mask = attention_mask[:, -response_length:]
                     old_log_probs = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
+                    
+                    # For WO-GRPO/WO-GRPO++, apply winner_mask to filter loss computation
+                    if "winner_mask" in model_inputs:
+                        winner_mask = model_inputs["winner_mask"]
+                        # Combine response_mask with winner_mask: only compute loss for winner samples
+                        effective_mask = response_mask * winner_mask
+                    else:
+                        effective_mask = response_mask
 
                     # all return: (bsz, response_length)
                     entropy, log_probs = self._forward_micro_batch(model_inputs, temperature=temperature, calculate_entropy=True)
@@ -291,14 +302,14 @@ class DataParallelPPOActor(BasePPOActor):
                         old_log_probs=old_log_probs,
                         log_probs=log_probs,
                         advantages=advantages,
-                        response_mask=response_mask,
+                        response_mask=effective_mask,  # Use effective_mask instead of response_mask
                         clip_ratio_low=self.config.clip_ratio_low,
                         clip_ratio_high=self.config.clip_ratio_high,
                         clip_ratio_dual=self.config.clip_ratio_dual,
                         loss_agg_mode=self.config.loss_agg_mode,
                     )
                     
-                    entropy_loss = core_algos.agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
+                    entropy_loss = core_algos.agg_loss(loss_mat=entropy, loss_mask=effective_mask, loss_agg_mode=self.config.loss_agg_mode)
                     if self.config.entropy_coeff != 0:
                         policy_loss = pg_loss - entropy_loss * self.config.entropy_coeff
                     else:
@@ -312,7 +323,7 @@ class DataParallelPPOActor(BasePPOActor):
                             ref_log_probs=ref_log_probs,
                             kl_penalty=self.config.kl_penalty,
                         )
-                        kl_loss = core_algos.agg_loss(loss_mat=kld, loss_mask=response_mask, loss_agg_mode=self.config.loss_agg_mode)
+                        kl_loss = core_algos.agg_loss(loss_mat=kld, loss_mask=effective_mask, loss_agg_mode=self.config.loss_agg_mode)
                         policy_loss = policy_loss + kl_loss * self.config.kl_coef
                         metrics["actor/kl_loss"] = kl_loss.detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef
