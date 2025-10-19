@@ -179,22 +179,26 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards, response_mask, index)
     elif adv_estimator == AdvantageEstimator.WO_GRPO:
         # Winner-Only GRPO: winner gets advantage=1, others get 0, if all the advantages are 0 / 1, use original GRPO advantages
-        advantages_wo, returns, advantages_original = core_algos.compute_wo_grpo_outcome_advantage(
+        advantages_wo, returns, advantages_original, winner_mask = core_algos.compute_wo_grpo_outcome_advantage(
             token_level_rewards, response_mask, index
         )
         # Use winner-only advantages for training (stored in 'advantages')
         advantages = advantages_wo
         # Store original GRPO advantages for metrics comparison with other jobs
         data.batch["advantages_original"] = advantages_original
+        # Store winner mask for filtering loss computation
+        data.batch["winner_mask"] = winner_mask
     elif adv_estimator == AdvantageEstimator.WO_GRPO_PP:
         # Winner-Only GRPO++: winner uses its original GRPO advantage value, others get 0
-        advantages_wo_pp, returns, advantages_original = core_algos.compute_wo_grpo_pp_outcome_advantage(
+        advantages_wo_pp, returns, advantages_original, winner_mask = core_algos.compute_wo_grpo_pp_outcome_advantage(
             token_level_rewards, response_mask, index
         )
         # Use WO-GRPO++ advantages for training (stored in 'advantages')
         advantages = advantages_wo_pp
         # Store original GRPO advantages for metrics comparison with other jobs
         data.batch["advantages_original"] = advantages_original
+        # Store winner mask for filtering loss computation
+        data.batch["winner_mask"] = winner_mask
     elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS:
         advantages, returns = core_algos.compute_reinforce_plus_plus_outcome_advantage(
             token_level_rewards, response_mask, gamma

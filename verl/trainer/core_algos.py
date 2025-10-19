@@ -178,7 +178,7 @@ def compute_grpo_outcome_advantage(
 @torch.no_grad()
 def compute_wo_grpo_pp_outcome_advantage(
     token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute advantage for Winner-Only GRPO++ (WO-GRPO++).
     Only the sample(s) with the highest score in each group use their original GRPO advantages, others get 0.
@@ -199,6 +199,8 @@ def compute_wo_grpo_pp_outcome_advantage(
             shape: (bs, response_length)
         advantages_original: `(torch.Tensor)`
             shape: (bs, response_length) - original GRPO advantages for metrics
+        winner_mask: `(torch.Tensor)`
+            shape: (bs, response_length) - mask indicating winner samples (1=winner, 0=non-winner)
 
     """
     # First compute the original GRPO advantages for statistics
@@ -224,10 +226,11 @@ def compute_wo_grpo_pp_outcome_advantage(
 
     advantages_original = original_scores.unsqueeze(-1) * response_mask
 
-    # Compute winner-only advantages
+    # Compute winner-only advantages and winner mask
     # For each group, find ALL winners (all samples with highest score) and use their GRPO advantages, others get 0
     # However, if all samples in a group have the same score (std ≈ 0), keep original advantages
     winner_advantages = torch.zeros_like(scores)
+    sample_winner_mask = torch.zeros_like(scores)  # 1 for winner samples, 0 for non-winners
     
     for idx in id2score:
         group_indices = id2idx_list[idx]
@@ -236,28 +239,32 @@ def compute_wo_grpo_pp_outcome_advantage(
         # Check if all scores in the group are the same (std ≈ 0)
         if id2std[idx] < eps:
             # All samples have same score, keep their original GRPO advantages
+            # All samples are considered "winners" in this case
             for i in group_indices:
                 winner_advantages[i] = original_scores[i]
+                sample_winner_mask[i] = 1.0
         else:
             # Find ALL winners (all samples with the highest score in the group)
             max_score = torch.max(group_scores)
-            winner_mask = (group_scores == max_score)  # Boolean mask for all winners
+            winner_bool_mask = (group_scores == max_score)  # Boolean mask for all winners
             
             # Set all winners' advantages to their original GRPO advantage values
-            for local_idx, is_winner in enumerate(winner_mask):
+            for local_idx, is_winner in enumerate(winner_bool_mask):
+                global_idx = group_indices[local_idx]
                 if is_winner:
-                    global_idx = group_indices[local_idx]
                     winner_advantages[global_idx] = original_scores[global_idx]
+                    sample_winner_mask[global_idx] = 1.0
 
     returns_wo = winner_advantages.unsqueeze(-1) * response_mask
+    winner_mask = sample_winner_mask.unsqueeze(-1) * response_mask  # Broadcast to token level
     
-    return returns_wo, returns_wo, advantages_original
+    return returns_wo, returns_wo, advantages_original, winner_mask
 
 
 @torch.no_grad()
 def compute_wo_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute advantage for Winner-Only GRPO (WO-GRPO).
     Only the sample(s) with the highest score in each group get advantage=1, others get 0.
@@ -278,6 +285,8 @@ def compute_wo_grpo_outcome_advantage(
             shape: (bs, response_length)
         advantages_original: `(torch.Tensor)`
             shape: (bs, response_length) - original GRPO advantages for metrics
+        winner_mask: `(torch.Tensor)`
+            shape: (bs, response_length) - mask indicating winner samples (1=winner, 0=non-winner)
 
     """
     # First compute the original GRPO advantages for statistics
@@ -303,10 +312,11 @@ def compute_wo_grpo_outcome_advantage(
 
     advantages_original = original_scores.unsqueeze(-1) * response_mask
 
-    # Compute WO-GRPO advantages
+    # Compute WO-GRPO advantages and winner mask
     # For each group, find ALL winners (all samples with highest score) and set their advantages to 1, others to 0
     # However, if all samples in a group have the same score (std ≈ 0), keep original advantages
     wo_advantages = torch.zeros_like(scores)
+    sample_winner_mask = torch.zeros_like(scores)  # 1 for winner samples, 0 for non-winners
     
     for idx in id2score:
         group_indices = id2idx_list[idx]
@@ -315,22 +325,26 @@ def compute_wo_grpo_outcome_advantage(
         # Check if all scores in the group are the same (std ≈ 0)
         if id2std[idx] < eps:
             # All samples have same score, keep their original GRPO advantages
+            # All samples are considered "winners" in this case
             for i in group_indices:
                 wo_advantages[i] = original_scores[i]
+                sample_winner_mask[i] = 1.0
         else:
             # Find ALL winners (all samples with the highest score in the group)
             max_score = torch.max(group_scores)
-            winner_mask = (group_scores == max_score)  # Boolean mask for all winners
+            winner_bool_mask = (group_scores == max_score)  # Boolean mask for all winners
             
             # Set all winners' advantages to 1
-            for local_idx, is_winner in enumerate(winner_mask):
+            for local_idx, is_winner in enumerate(winner_bool_mask):
+                global_idx = group_indices[local_idx]
                 if is_winner:
-                    global_idx = group_indices[local_idx]
                     wo_advantages[global_idx] = 1.0
+                    sample_winner_mask[global_idx] = 1.0
 
     returns_wo = wo_advantages.unsqueeze(-1) * response_mask
+    winner_mask = sample_winner_mask.unsqueeze(-1) * response_mask  # Broadcast to token level
     
-    return returns_wo, returns_wo, advantages_original
+    return returns_wo, returns_wo, advantages_original, winner_mask
 
 
 @torch.no_grad()
