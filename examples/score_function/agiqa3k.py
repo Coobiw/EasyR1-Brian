@@ -101,7 +101,7 @@ def compute_score(predict_str: str, ground_truth: str, format_weight: float = 0.
     format_score = format_reward(predict_str)
     accuracy_score = accuracy_reward(predict_str, ground_truth, threshold)
     return {
-        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score,
+        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score if format_score == 1.0 else 0.0,
         "format": format_score,
         "accuracy": accuracy_score,
     }
@@ -110,7 +110,7 @@ def compute_score_continuous(predict_str: str, ground_truth: str, format_weight:
     format_score = format_reward(predict_str)
     accuracy_score = accuracy_reward_continuous(predict_str, ground_truth, threshold)
     return {
-        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score,
+        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score if format_score == 1.0 else 0.0,
         "format": format_score,
         "accuracy": accuracy_score,
     }
@@ -126,7 +126,7 @@ def compute_score_gaussian(
     format_score = format_reward(predict_str)
     accuracy_score = accuracy_reward_gaussian(predict_str, ground_truth, r_min, diff_at_rmin, use_floor)
     return {
-        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score,
+        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score if format_score == 1.0 else 0.0,
         "format": format_score,
         "accuracy": accuracy_score,
     }

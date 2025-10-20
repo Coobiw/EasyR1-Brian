@@ -15,11 +15,12 @@ MODEL_PATH="/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instru
 
 python3 -m verl.trainer.main \
     config=examples/config_agiqa3k_wo-grpo.yaml \
+    algorithm.adv_estimator="wo_grpo_pp" \
     worker.actor.model.model_path=${MODEL_PATH} \
     trainer.save_freq=18 \
     trainer.save_limit=60 \
-    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_format0p1_bs128-mbs64_kl0_chat-template_20251019_fixed \
-    trainer.save_checkpoint_path="./cache/output/agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_format0p1_bs128-mbs64_kl0_chat-template_20251019_fixed/" \
+    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_pp_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed \
+    trainer.save_checkpoint_path="./cache/output/agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_pp_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed-format-reward/" \
     trainer.total_episodes=10 \
     trainer.logger=['console','wandb'] \
     trainer.n_gpus_per_node=8
