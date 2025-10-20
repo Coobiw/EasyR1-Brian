@@ -19,7 +19,7 @@ python3 -m verl.trainer.main \
     worker.actor.model.model_path=${MODEL_PATH} \
     trainer.save_freq=18 \
     trainer.save_limit=60 \
-    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_pp_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed \
+    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_pp_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed-format-reward \
     trainer.save_checkpoint_path="./cache/output/agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_pp_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed-format-reward/" \
     trainer.total_episodes=10 \
     trainer.logger=['console','wandb'] \
