@@ -97,20 +97,30 @@ def accuracy_reward_gaussian(
 
     return 0.0
 
-def compute_score(predict_str: str, ground_truth: str, format_weight: float = 0.5, threshold: float = 0.35) -> Dict[str, float]:
+def compute_score(predict_str: str, ground_truth: str, format_weight: float = 0.5, strict_format: bool = True, threshold: float = 0.35) -> Dict[str, float]:
     format_score = format_reward(predict_str)
     accuracy_score = accuracy_reward(predict_str, ground_truth, threshold)
+    overall_score = accuracy_score + format_weight * format_score
+    if strict_format:
+        final_overall = overall_score if format_score == 1.0 else 0.0
+    else:
+        final_overall = overall_score
     return {
-        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score,
+        "overall": final_overall,
         "format": format_score,
         "accuracy": accuracy_score,
     }
 
-def compute_score_continuous(predict_str: str, ground_truth: str, format_weight: float = 0.5, threshold: float = 0.35) -> Dict[str, float]:
+def compute_score_continuous(predict_str: str, ground_truth: str, format_weight: float = 0.5, strict_format: bool = True, threshold: float = 0.35) -> Dict[str, float]:
     format_score = format_reward(predict_str)
     accuracy_score = accuracy_reward_continuous(predict_str, ground_truth, threshold)
+    overall_score = accuracy_score + format_weight * format_score
+    if strict_format:
+        final_overall = overall_score if format_score == 1.0 else 0.0
+    else:
+        final_overall = overall_score
     return {
-        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score,
+        "overall": final_overall,
         "format": format_score,
         "accuracy": accuracy_score,
     }
@@ -119,14 +129,20 @@ def compute_score_gaussian(
     predict_str: str,
     ground_truth: str,
     format_weight: float = 0.5,
+    strict_format: bool = True,
     r_min=0.05,  # 奖励地板；“diff=1”处的目标值也就是 r_min
     diff_at_rmin=1.0,   # 在“相差多少分”时把奖励压到 r_min；默认 1 分
     use_floor=True,     # 是否启用地板裁剪
 )-> Dict[str, float]:
     format_score = format_reward(predict_str)
     accuracy_score = accuracy_reward_gaussian(predict_str, ground_truth, r_min, diff_at_rmin, use_floor)
+    overall_score = accuracy_score + format_weight * format_score
+    if strict_format:
+        final_overall = overall_score if format_score == 1.0 else 0.0
+    else:
+        final_overall = overall_score
     return {
-        "overall": (1 - format_weight) * accuracy_score + format_weight * format_score,
+        "overall": final_overall,
         "format": format_score,
         "accuracy": accuracy_score,
     }
