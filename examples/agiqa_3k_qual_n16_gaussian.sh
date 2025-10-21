@@ -15,11 +15,15 @@ MODEL_PATH="/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instru
 
 python3 -m verl.trainer.main \
     config=examples/config_agiqa3k_gaussian.yaml \
+    worker.actor.global_batch_size=128 \
     worker.actor.model.model_path=${MODEL_PATH} \
+    worker.rollout.val_override_config.temperature=1.0 \
+    worker.reward.score_function_kwargs.format_weight=0.5 \
+    worker.reward.score_function_kwargs.strict_format=False \
     trainer.save_freq=18 \
     trainer.save_limit=60 \
-    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_format0p1_bs128-mbs64_kl0_chat-template_20251019 \
-    trainer.save_checkpoint_path="./cache/output/agiqa3k_qual_n16_temp1_gaussian-default_format0p1_bs128-mbs64_kl0_chat-template_20251019/" \
+    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_format0p5_bs128-mbs64_kl0_chat-template_20251021_on-policy_val-temp1 \
+    trainer.save_checkpoint_path="./cache/output/agiqa3k_qual_n16_temp1_gaussian-default_format0p5_bs128-mbs64_kl0_chat-template_20251021_on-policy_val-temp1/" \
     trainer.total_episodes=10 \
     trainer.logger=['console','wandb'] \
     trainer.n_gpus_per_node=8
