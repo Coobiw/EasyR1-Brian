@@ -85,6 +85,8 @@ class TrainerConfig:
     val_before_train: bool = True
     val_only: bool = False
     val_generations_to_log: int = 0
+    train_generations_to_log: int = 0  # Number of training rollout samples to log
+    train_log_freq: int = 10  # Log training generations every N steps
     save_freq: int = -1
     save_limit: int = -1
     save_checkpoint_path: Optional[str] = None

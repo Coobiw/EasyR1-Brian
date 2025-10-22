@@ -338,6 +338,120 @@ class RayPPOTrainer:
 
         samples = samples[: self.config.trainer.val_generations_to_log]
         self.logger.log_generation(samples, self.global_step)
+    
+    def _maybe_log_train_generations(
+        self, batch: DataProto, reward_scores: torch.Tensor
+    ) -> None:
+        """Log training rollout samples with multiple outputs per prompt (n > 1)"""
+        if self.config.trainer.train_generations_to_log <= 0:
+            return
+        
+        # Only log every train_log_freq steps
+        if self.global_step % self.config.trainer.train_log_freq != 0:
+            return
+        
+        rollout_n = self.config.worker.rollout.n
+        
+        # Decode inputs and outputs
+        input_ids = batch.batch["prompts"]  # Shape: (bs * n, prompt_length)
+        response_ids = batch.batch["responses"]  # Shape: (bs * n, response_length)
+        ground_truth = batch.non_tensor_batch["ground_truth"]  # Shape: (bs * n,)
+        scores = reward_scores.cpu().tolist()  # Shape: (bs * n,)
+        
+        # Decode text
+        input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
+        output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in response_ids]
+        
+        # Group by prompt (every n consecutive samples belong to the same prompt)
+        num_prompts = len(input_texts) // rollout_n
+        grouped_samples = []
+        
+        for prompt_idx in range(num_prompts):
+            start_idx = prompt_idx * rollout_n
+            end_idx = start_idx + rollout_n
+            
+            # Get data for this prompt's rollouts
+            prompt_input = input_texts[start_idx]  # Same for all n rollouts
+            prompt_label = str(ground_truth[start_idx])  # Same for all n rollouts
+            rollout_outputs = output_texts[start_idx:end_idx]
+            rollout_scores = scores[start_idx:end_idx]
+            
+            # Create a row with: (input, label, output_1, score_1, output_2, score_2, ...)
+            row = [prompt_input, prompt_label]
+            for i, (output, score) in enumerate(zip(rollout_outputs, rollout_scores), 1):
+                row.extend([output, score])
+            
+            grouped_samples.append(tuple(row))
+        
+        # Sort and sample
+        grouped_samples.sort(key=lambda x: x[0])  # Sort by input text
+        rng = np.random.RandomState(42 + self.global_step)  # Different seed each time
+        rng.shuffle(grouped_samples)
+        grouped_samples = grouped_samples[: self.config.trainer.train_generations_to_log]
+        
+        # Log to console/wandb with custom format
+        self._log_train_generations_to_backends(grouped_samples, rollout_n, self.global_step)
+    
+    def _log_train_generations_to_backends(
+        self, samples: List[tuple], rollout_n: int, step: int
+    ) -> None:
+        """Log training generations to console/wandb/swanlab"""
+        # Log to console
+        if "console" in self.config.trainer.logger:
+            print(f"\n{'='*80}")
+            print(f"[Train Rollout Generations at Step {step}]")
+            print(f"{'='*80}")
+            for i, sample in enumerate(samples, 1):
+                prompt_input = sample[0]
+                prompt_label = sample[1]
+                print(f"\n--- Sample {i} ---")
+                print(f"[Input] {prompt_input[:200]}..." if len(prompt_input) > 200 else f"[Input] {prompt_input}")
+                print(f"[Label] {prompt_label}")
+                for rollout_idx in range(rollout_n):
+                    output = sample[2 + rollout_idx * 2]
+                    score = sample[3 + rollout_idx * 2]
+                    print(f"[Rollout {rollout_idx+1}] Score: {score:.4f}")
+                    print(f"  Output: {output[:200]}..." if len(output) > 200 else f"  Output: {output}")
+            print(f"{'='*80}\n")
+        
+        # Log to wandb
+        if "wandb" in self.config.trainer.logger:
+            try:
+                import wandb
+                # Create table with dynamic columns
+                columns = ["step", "input", "label"]
+                for i in range(1, rollout_n + 1):
+                    columns.extend([f"output_rollout_{i}", f"score_rollout_{i}"])
+                
+                data = []
+                for sample in samples:
+                    row = [step, sample[0], sample[1]]
+                    for rollout_idx in range(rollout_n):
+                        row.append(sample[2 + rollout_idx * 2])  # output
+                        row.append(sample[3 + rollout_idx * 2])  # score
+                    data.append(row)
+                
+                table = wandb.Table(columns=columns, data=data)
+                wandb.log({"train/rollout_generations": table}, step=step)
+            except Exception as e:
+                print(f"Warning: Failed to log train generations to wandb: {e}")
+        
+        # Log to swanlab
+        if "swanlab" in self.config.trainer.logger:
+            try:
+                import swanlab
+                text_list = []
+                for i, sample in enumerate(samples, 1):
+                    parts = [f"Input: {sample[0]}", f"Label: {sample[1]}"]
+                    for rollout_idx in range(rollout_n):
+                        output = sample[2 + rollout_idx * 2]
+                        score = sample[3 + rollout_idx * 2]
+                        parts.append(f"Rollout {rollout_idx+1} (score={score:.4f}): {output}")
+                    row_text = "\n\n".join(parts)
+                    text_list.append(swanlab.Text(row_text, caption=f"train_sample_{i}"))
+                swanlab.log({"train/rollout_generations": text_list}, step=step)
+            except Exception as e:
+                print(f"Warning: Failed to log train generations to swanlab: {e}")
 
     def _validate(self) -> Dict[str, Any]:
         reward_tensor_lst = []
@@ -682,6 +796,9 @@ class RayPPOTrainer:
                             f"reward/{key}": value for key, value in reduce_metrics(reward_metrics).items()
                         }
                         metrics.update(reward_metrics)
+                    
+                    # Log training rollout generations (before balance to preserve order)
+                    self._maybe_log_train_generations(batch, reward_tensor.sum(dim=-1))
 
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
