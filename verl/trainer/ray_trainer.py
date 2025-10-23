@@ -320,6 +320,9 @@ class RayPPOTrainer:
         
         # Initialize best main_score for checkpoint tracking
         self.best_main_score = -float('inf')
+        
+        # Initialize train generation table for wandb (累积式记录)
+        self.train_generation_table = None
 
     def _maybe_log_val_generations(
         self, inputs: List[str], outputs: List[str], labels: List[str], scores: List[float]
@@ -414,7 +417,7 @@ class RayPPOTrainer:
                     print(f"  Output: {output[:200]}..." if len(output) > 200 else f"  Output: {output}")
             print(f"{'='*80}\n")
         
-        # Log to wandb
+        # Log to wandb (使用累积式 table，避免覆盖问题)
         if "wandb" in self.config.trainer.logger:
             try:
                 import wandb
@@ -423,16 +426,24 @@ class RayPPOTrainer:
                 for i in range(1, rollout_n + 1):
                     columns.extend([f"output_rollout_{i}", f"score_rollout_{i}"])
                 
-                data = []
+                # Initialize table on first call
+                if self.train_generation_table is None:
+                    self.train_generation_table = wandb.Table(columns=columns)
+                
+                # Create a new table with same columns and existing data (workaround for wandb issue)
+                # See: https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
+                new_table = wandb.Table(columns=columns, data=self.train_generation_table.data)
+                
+                # Add new rows
                 for sample in samples:
                     row = [step, sample[0], sample[1]]
                     for rollout_idx in range(rollout_n):
                         row.append(sample[2 + rollout_idx * 2])  # output
                         row.append(sample[3 + rollout_idx * 2])  # score
-                    data.append(row)
+                    new_table.add_data(*row)
                 
-                table = wandb.Table(columns=columns, data=data)
-                wandb.log({"train/rollout_generations": table}, step=step)
+                wandb.log({"train/rollout_generations": new_table}, step=step)
+                self.train_generation_table = new_table
             except Exception as e:
                 print(f"Warning: Failed to log train generations to wandb: {e}")
         
