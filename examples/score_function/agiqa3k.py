@@ -3,10 +3,14 @@ from typing import Dict
 import math
 
 def grade_answer(pred, gt, threshold):
+    if float(pred) < 1.0 or float(pred) > 5.0:
+        return 0.
     # print("threshold:\t", threshold)
     return (abs(float(pred) - float(gt)) < threshold)
 
 def grade_answer_continuous(pred, gt, threshold):
+    if float(pred) < 1.0 or float(pred) > 5.0:
+        return 0.
     diff = abs(float(pred) - float(gt))
 
     if diff < threshold:
@@ -21,6 +25,8 @@ def grade_answer_gaussian(
     diff_at_rmin: float = 1.0,  # “相差多少分”时衰减到 r_min（原始分值尺度）
     use_floor: bool = True,
 ) -> float:
+    if float(pred) < 1.0 or float(pred) > 5.0:
+        return 0.
     # 归一误差到[0,1]，gt/pred在[1,5]
     d = abs(float(pred) - float(gt)) / 4.0
     d0 = diff_at_rmin / 4.0
