@@ -53,6 +53,41 @@ def reduce_metrics(metrics: Dict[str, List[Any]]) -> Dict[str, Any]:
     return {key: np.mean(value) for key, value in metrics.items()}
 
 
+def compute_non_cutoff_response_length_metrics(
+    response_length: torch.Tensor, max_response_length: int
+) -> Dict[str, Any]:
+    """
+    Compute response length metrics excluding samples that hit the cutoff (max_response_length).
+    This is useful for tracking the evolution of response length without being skewed by cutoff samples.
+    
+    Args:
+        response_length: Tensor of response lengths, shape (batch_size,)
+        max_response_length: Maximum allowed response length
+    
+    Returns:
+        Dictionary with metrics for non-cutoff samples
+    """
+    # Find samples that are NOT cutoff (response_length < max_response_length)
+    non_cutoff_mask = response_length < max_response_length
+    non_cutoff_lengths = response_length[non_cutoff_mask]
+    
+    # If no non-cutoff samples, return zeros
+    if non_cutoff_lengths.numel() == 0:
+        return {
+            "response_length_no_cutoff/mean": 0.0,
+            "response_length_no_cutoff/max": 0.0,
+            "response_length_no_cutoff/min": 0.0,
+            "response_length_no_cutoff/count": 0,
+        }
+    
+    return {
+        "response_length_no_cutoff/mean": torch.mean(non_cutoff_lengths.float()).detach().item(),
+        "response_length_no_cutoff/max": torch.max(non_cutoff_lengths).detach().item(),
+        "response_length_no_cutoff/min": torch.min(non_cutoff_lengths).detach().item(),
+        "response_length_no_cutoff/count": non_cutoff_lengths.numel(),
+    }
+
+
 def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str, Any]:
     sequence_score = batch.batch["token_level_scores"].sum(-1)
     sequence_reward = batch.batch["token_level_rewards"].sum(-1)
@@ -136,13 +171,15 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
             if use_critic
             else {}
         ),
-        # response length
+        # response length (all samples)
         "response_length/mean": torch.mean(response_length).detach().item(),
         "response_length/max": torch.max(response_length).detach().item(),
         "response_length/min": torch.min(response_length).detach().item(),
         "response_length/clip_ratio": torch.mean(torch.eq(response_length, max_response_length).float())
         .detach()
         .item(),
+        # response length (excluding cutoff samples) - for plotting evolution curve
+        **compute_non_cutoff_response_length_metrics(response_length, max_response_length),
         # prompt length
         "prompt_length/mean": torch.mean(prompt_length).detach().item(),
         "prompt_length/max": torch.max(prompt_length).detach().item(),

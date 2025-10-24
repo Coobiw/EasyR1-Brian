@@ -4,8 +4,10 @@ datasets
 flash-attn>=2.4.3
 liger-kernel
 mathruler
+matplotlib
 numpy
 omegaconf
+openai
 pandas
 peft
 pillow
