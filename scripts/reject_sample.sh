@@ -68,7 +68,7 @@ set -e  # 遇到错误立即退出
 MODEL_PATH="${MODEL_PATH:-/code/All-In-One/qbw/EasyR1-20250410/cache/ckpt/Qwen2.5-VL-7B-Instruct}"
 
 # 模型名称（用于标识结果）
-MODEL_NAME="${MODEL_NAME:-qwen2_5_vl_7b_baseline}"
+MODEL_NAME="${MODEL_NAME:-qwen2_5_vl_7b_baseline_agiqa3k}"
 
 # vLLM 服务端口
 MODEL_PORT="${MODEL_PORT:-8000}"
