@@ -215,7 +215,7 @@ def compute_wo_grpo_outcome_advantage(
         id2idx_list[index[i]].append(i)
 
     for idx in id2score:
-        assert len(id2score[idx]) > 1, "WO-GRPO++ needs rollout.n > 1."
+        assert len(id2score[idx]) > 1, "WO-GRPO needs rollout.n > 1."
         id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
         id2std[idx] = torch.std(torch.tensor(id2score[idx]))
 
