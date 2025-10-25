@@ -150,7 +150,7 @@ async def async_single_rollout(
                 max_tokens=4096,
             )
             ret = resp.choices[0].message.content
-            print(f"\033[91m{ret}\033[0m")
+            # print(f"\033[91m{ret}\033[0m")
             return ret
         except Exception as e:
             if retry < max_retries - 1:
@@ -309,7 +309,7 @@ async def main():
     try:
         # 加载数据集
         print("\nLoading dataset from HuggingFace...")
-        dataset = load_dataset("Coobiw/merged_agiqa5k_prompt_1022", split="train")
+        dataset = load_dataset("Coobiw/agiqa3k_prompt_1013", split="train")
         print(f"Dataset loaded: {len(dataset)} samples")
         
         # 准备数据
