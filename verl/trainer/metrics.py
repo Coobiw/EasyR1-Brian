@@ -178,7 +178,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
         "prompt_length/max": torch.max(prompt_length).detach().item(),
         "prompt_length/min": torch.min(prompt_length).detach().item(),
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
-        # WO-GRPO or WO-GRPO++ specific metrics
+        # WO-GRPO specific metrics
         **additional_metrics,
     }
     return metrics
