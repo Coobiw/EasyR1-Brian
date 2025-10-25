@@ -251,7 +251,7 @@ class DataParallelPPOActor(BasePPOActor):
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
-        # For WO-GRPO/WO-GRPO++, also include winner_mask to filter loss computation
+        # For BW-GRPO, also include winner_mask to filter loss computation
         if "winner_mask" in data.batch:
             select_keys.append("winner_mask")
 
@@ -287,7 +287,7 @@ class DataParallelPPOActor(BasePPOActor):
                     old_log_probs = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
                     
-                    # For WO-GRPO/WO-GRPO++, apply winner_mask to filter loss computation
+                    # For BW-GRPO, apply winner_mask to filter loss computation
                     if "winner_mask" in model_inputs:
                         winner_mask = model_inputs["winner_mask"]
                         # Combine response_mask with winner_mask: only compute loss for winner samples

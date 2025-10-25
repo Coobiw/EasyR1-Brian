@@ -15,14 +15,14 @@ MODEL_PATH="/code/All-In-One/qbw/EasyR1-20250410/cache/output/agiqa3k_qual_n16_t
 # worker.actor.loss_agg_mode="seq-mean-token-mean" \
 
 python3 -m verl.trainer.main \
-    config=examples/config_agiqa3k_wo-grpo.yaml \
-    algorithm.adv_estimator="wo_grpo_pp" \
+    config=examples/config_agiqa3k_bw-grpo.yaml \
     algorithm.kl_coef=1e-2 \
     worker.actor.model.model_path=${MODEL_PATH} \
     trainer.save_freq=18 \
     trainer.save_limit=60 \
-    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_pp_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed-format-reward_after-grpo \
-    trainer.save_checkpoint_path="./cache/output/agiqa3k_qual_n16_temp1_gaussian-default_wo-grpo_pp_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed-format-reward_after-grpo/" \
+    trainer.experiment_name=agiqa3k_qual_n16_temp1_gaussian-default_bw-grpo_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed-format-reward_after-grpo \
+    trainer.save_checkpoint_path="./cache/output/agiqa3k_qual_n16_temp1_gaussian-default_bw-grpo_format0p1_bs128-mbs64_kl0_chat-template_20251020_fixed-format-reward_after-grpo/" \
     trainer.total_episodes=10 \
     trainer.logger=['console','wandb'] \
     trainer.n_gpus_per_node=8
+

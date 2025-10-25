@@ -69,6 +69,7 @@ class AlgorithmConfig:
     kl_type: str = "fixed"
     kl_horizon: float = 0.0
     kl_target: float = 0.0
+    keep_neg_ratio: float = 1.0  # BW-GRPO: ratio of negative samples to keep (1.0 = keep all)
 
 
 @dataclass
@@ -116,6 +117,22 @@ class PPOConfig:
         self.worker.actor.use_kl_loss = self.algorithm.use_kl_loss
         self.worker.actor.kl_penalty = self.algorithm.kl_penalty
         self.worker.actor.kl_coef = self.algorithm.kl_coef
+        
+        # Validate keep_neg_ratio range [0, 1]
+        if not (0.0 <= self.algorithm.keep_neg_ratio <= 1.0):
+            raise ValueError(
+                f"keep_neg_ratio must be in the range [0.0, 1.0]. "
+                f"Got keep_neg_ratio={self.algorithm.keep_neg_ratio}. "
+                f"0.0 means discard all negative samples, 1.0 means keep all negative samples."
+            )
+        
+        # Validate keep_neg_ratio: only supported for bw_grpo
+        if self.algorithm.adv_estimator != "bw_grpo" and self.algorithm.keep_neg_ratio != 1.0:
+            raise ValueError(
+                f"keep_neg_ratio is currently only supported for bw_grpo algorithm. "
+                f"Got adv_estimator='{self.algorithm.adv_estimator}' with keep_neg_ratio={self.algorithm.keep_neg_ratio}. "
+                f"Please either set adv_estimator='bw_grpo' or set keep_neg_ratio=1.0."
+            )
 
     def deep_post_init(self):
         recursive_post_init(self)
