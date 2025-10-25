@@ -176,7 +176,7 @@ def compute_grpo_outcome_advantage(
 
 
 @torch.no_grad()
-def compute_wo_grpo_outcome_advantage(
+def compute_bw_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor, 
     response_mask: torch.Tensor, 
     index: torch.Tensor, 
@@ -184,7 +184,7 @@ def compute_wo_grpo_outcome_advantage(
     keep_neg_ratio: float = 1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Compute advantage for Winner-Only GRPO (WO-GRPO).
+    Compute advantage for Best-Winner GRPO (BW-GRPO).
     
     Strategy:
     1. Keep ALL winners (samples with highest score in each group)
@@ -208,8 +208,8 @@ def compute_wo_grpo_outcome_advantage(
             1.0 = keep all negative samples, 0.5 = keep worst 50% of negative samples, 0.0 = keep none
 
     Returns:
-        advantages_wo: `(torch.Tensor)`
-            shape: (bs, response_length) - WO-GRPO advantages (kept samples have GRPO adv, filtered are 0)
+        advantages_bw: `(torch.Tensor)`
+            shape: (bs, response_length) - BW-GRPO advantages (kept samples have GRPO adv, filtered are 0)
         returns: `(torch.Tensor)`
             shape: (bs, response_length)
         advantages_original: `(torch.Tensor)`
@@ -233,7 +233,7 @@ def compute_wo_grpo_outcome_advantage(
         id2idx_list[index[i]].append(i)
 
     for idx in id2score:
-        assert len(id2score[idx]) > 1, "WO-GRPO needs rollout.n > 1."
+        assert len(id2score[idx]) > 1, "BW-GRPO needs rollout.n > 1."
         id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
         id2std[idx] = torch.std(torch.tensor(id2score[idx]))
 
@@ -244,7 +244,7 @@ def compute_wo_grpo_outcome_advantage(
 
     advantages_original = original_scores.unsqueeze(-1) * response_mask
 
-    # Compute winner-only advantages and winner mask
+    # Compute best-winner advantages and winner mask
     # For each group:
     # 1. Keep ALL winners (samples with highest score)
     # 2. Discard ALL non-winner positive samples (advantage > 0 but not winner)
@@ -309,10 +309,10 @@ def compute_wo_grpo_outcome_advantage(
                         winner_advantages[global_idx] = original_scores[global_idx]
                         sample_winner_mask[global_idx] = 1.0
 
-    returns_wo = winner_advantages.unsqueeze(-1) * response_mask
+    returns_bw = winner_advantages.unsqueeze(-1) * response_mask
     winner_mask = sample_winner_mask.unsqueeze(-1) * response_mask  # Broadcast to token level
     
-    return returns_wo, returns_wo, advantages_original, winner_mask
+    return returns_bw, returns_bw, advantages_original, winner_mask
 
 
 @torch.no_grad()

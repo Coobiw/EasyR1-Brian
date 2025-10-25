@@ -16,7 +16,7 @@ data:
   filter_overlong_prompts: true
 
 algorithm:
-  adv_estimator: wo_grpo
+  adv_estimator: bw_grpo
   disable_kl: false
   use_kl_loss: true
   kl_penalty: low_var_kl
