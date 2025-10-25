@@ -165,7 +165,7 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.KLController, kl_penal
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0):
+def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0, keep_neg_ratio: float = 1.0):
     token_level_rewards = data.batch["token_level_rewards"]
     response_mask = data.batch["response_mask"]
     index = data.non_tensor_batch["uid"]
@@ -178,8 +178,9 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards, response_mask, index)
     elif adv_estimator == AdvantageEstimator.WO_GRPO:
         # Winner-Only GRPO: winner uses its original GRPO advantage value, others get 0
+        # Support keep_neg_ratio: keep a portion of negative samples based on advantage ranking
         advantages_wo, returns, advantages_original, winner_mask = core_algos.compute_wo_grpo_outcome_advantage(
-            token_level_rewards, response_mask, index
+            token_level_rewards, response_mask, index, keep_neg_ratio=keep_neg_ratio
         )
         # Use WO-GRPO advantages for training (stored in 'advantages')
         advantages = advantages_wo
@@ -841,6 +842,7 @@ class RayPPOTrainer:
                             adv_estimator=self.config.algorithm.adv_estimator,
                             gamma=self.config.algorithm.gamma,
                             lam=self.config.algorithm.lam,
+                            keep_neg_ratio=self.config.algorithm.keep_neg_ratio,
                         )
 
                     # update critic

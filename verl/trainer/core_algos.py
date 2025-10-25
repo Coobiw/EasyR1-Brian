@@ -177,12 +177,22 @@ def compute_grpo_outcome_advantage(
 
 @torch.no_grad()
 def compute_wo_grpo_outcome_advantage(
-    token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6
+    token_level_rewards: torch.Tensor, 
+    response_mask: torch.Tensor, 
+    index: torch.Tensor, 
+    eps: float = 1e-6,
+    keep_neg_ratio: float = 1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute advantage for Winner-Only GRPO (WO-GRPO).
-    Only the sample(s) with the highest score in each group use their original GRPO advantages, others get 0.
-    This encourages the model to focus on learning from the best sample(s) with proper gradient scaling.
+    
+    Strategy:
+    1. Keep ALL winners (samples with highest score in each group)
+    2. Discard ALL non-winner positive samples (advantage > 0 but not winner)
+    3. For negative samples (advantage < 0), keep a portion based on keep_neg_ratio
+    
+    This encourages the model to learn from winners, while optionally learning from 
+    the worst negative samples to explicitly avoid bad behaviors.
 
     Args:
         token_level_rewards: `(torch.Tensor)`
@@ -191,18 +201,26 @@ def compute_wo_grpo_outcome_advantage(
             shape: (bs, response_length)
         index: `(torch.Tensor)`
             Group index for each sample
+        eps: `(float)`
+            Small value for numerical stability
+        keep_neg_ratio: `(float)`
+            Ratio of negative samples (advantage < 0) to keep (0.0 to 1.0). 
+            1.0 = keep all negative samples, 0.5 = keep worst 50% of negative samples, 0.0 = keep none
 
     Returns:
         advantages_wo: `(torch.Tensor)`
-            shape: (bs, response_length) - winner-only advantages (winner's GRPO adv, others 0)
+            shape: (bs, response_length) - WO-GRPO advantages (kept samples have GRPO adv, filtered are 0)
         returns: `(torch.Tensor)`
             shape: (bs, response_length)
         advantages_original: `(torch.Tensor)`
             shape: (bs, response_length) - original GRPO advantages for metrics
         winner_mask: `(torch.Tensor)`
-            shape: (bs, response_length) - mask indicating winner samples (1=winner, 0=non-winner)
+            shape: (bs, response_length) - mask indicating kept samples (1=kept, 0=filtered)
 
     """
+    # Validate keep_neg_ratio is in [0, 1]
+    assert 0.0 <= keep_neg_ratio <= 1.0, f"keep_neg_ratio must be in [0, 1], got {keep_neg_ratio}"
+    
     # First compute the original GRPO advantages for statistics
     scores = token_level_rewards.sum(dim=-1)
     id2score = defaultdict(list)
@@ -227,14 +245,18 @@ def compute_wo_grpo_outcome_advantage(
     advantages_original = original_scores.unsqueeze(-1) * response_mask
 
     # Compute winner-only advantages and winner mask
-    # For each group, find ALL winners (all samples with highest score) and use their GRPO advantages, others get 0
+    # For each group:
+    # 1. Keep ALL winners (samples with highest score)
+    # 2. Discard ALL non-winner positive samples (advantage > 0 but not winner)
+    # 3. For negative samples (advantage < 0), keep a portion based on keep_neg_ratio
     # However, if all samples in a group have the same score (std ≈ 0), keep original advantages
     winner_advantages = torch.zeros_like(scores)
-    sample_winner_mask = torch.zeros_like(scores)  # 1 for winner samples, 0 for non-winners
+    sample_winner_mask = torch.zeros_like(scores)  # 1 for winner/kept samples, 0 for filtered
     
     for idx in id2score:
         group_indices = id2idx_list[idx]
         group_scores = torch.tensor([scores[i] for i in group_indices])
+        group_advantages = torch.tensor([original_scores[i] for i in group_indices])
         
         # Check if all scores in the group are the same (std ≈ 0)
         if id2std[idx] < eps:
@@ -248,12 +270,44 @@ def compute_wo_grpo_outcome_advantage(
             max_score = torch.max(group_scores)
             winner_bool_mask = (group_scores == max_score)  # Boolean mask for all winners
             
-            # Set all winners' advantages to their original GRPO advantage values
+            # Step 1: Keep all winners
             for local_idx, is_winner in enumerate(winner_bool_mask):
                 global_idx = group_indices[local_idx]
                 if is_winner:
                     winner_advantages[global_idx] = original_scores[global_idx]
                     sample_winner_mask[global_idx] = 1.0
+            
+            # Step 2: For non-winners, only process negative samples
+            # Step 3: Discard all non-winner positive samples
+            non_winner_local_indices = [local_idx for local_idx, is_winner in enumerate(winner_bool_mask) if not is_winner]
+            
+            # Process negative samples only if keep_neg_ratio > 0.0
+            # When keep_neg_ratio = 0.0, all negative samples are discarded (not entering this branch)
+            if len(non_winner_local_indices) > 0 and keep_neg_ratio > 0.0:
+                # Collect only negative samples (advantage < 0)
+                negative_samples = []  # (local_idx, global_idx, advantage)
+                
+                for local_idx in non_winner_local_indices:
+                    global_idx = group_indices[local_idx]
+                    adv = group_advantages[local_idx]
+                    if adv < 0:  # Only negative samples
+                        negative_samples.append((local_idx, global_idx, adv))
+                
+                # Keep a portion of negative samples based on keep_neg_ratio
+                if len(negative_samples) > 0:
+                    # Sort negative samples by advantage (ascending order - worst first)
+                    negative_samples.sort(key=lambda x: x[2])
+                    
+                    # Calculate how many negative samples to keep
+                    # Note: max(1, ...) ensures at least 1 negative sample is kept when keep_neg_ratio > 0
+                    # For keep_neg_ratio = 0.0, we never enter this branch (filtered by outer condition)
+                    num_neg_to_keep = max(1, int(len(negative_samples) * keep_neg_ratio)) if keep_neg_ratio < 1.0 else len(negative_samples)
+                    
+                    # Keep the worst negative samples
+                    for i in range(num_neg_to_keep):
+                        _, global_idx, _ = negative_samples[i]
+                        winner_advantages[global_idx] = original_scores[global_idx]
+                        sample_winner_mask[global_idx] = 1.0
 
     returns_wo = winner_advantages.unsqueeze(-1) * response_mask
     winner_mask = sample_winner_mask.unsqueeze(-1) * response_mask  # Broadcast to token level
