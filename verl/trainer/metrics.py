@@ -111,30 +111,23 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
     valid_adv = torch.masked_select(advantages_for_metrics, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
     
-    # For WO-GRPO and WO-GRPO++, also compute metrics for their specific advantages
+    # For WO-GRPO, also compute metrics for their specific advantages
     additional_metrics = {}
     if "advantages_original" in batch.batch:
-        # This means we're using WO-GRPO or WO-GRPO++
+        # This means we're using WO-GRPO
         # batch["advantages"] contains algorithm-specific advantages (used for training)
         valid_adv_specific = torch.masked_select(advantages, response_mask)
         
         # Determine which algorithm is being used by checking the advantage pattern
-        # WO-GRPO: winner has advantage=1 (always 1 or 0)
-        # WO-GRPO++: winner has GRPO advantage value (can be any float)
+        # WO-GRPO: winner has GRPO advantage value (can be any float)
         max_adv = torch.max(valid_adv_specific).detach().item()
         
-        if abs(max_adv - 1.0) < 1e-6:  # Max is close to 1, likely WO-GRPO
-            additional_metrics = {
-                "critic/advantages_wo/mean": torch.mean(valid_adv_specific).detach().item(),
-                "critic/advantages_wo/max": torch.max(valid_adv_specific).detach().item(),
-                "critic/advantages_wo/min": torch.min(valid_adv_specific).detach().item(),
-            }
-        else:  # Otherwise, it's WO-GRPO++
-            additional_metrics = {
-                "critic/advantages_wo_pp/mean": torch.mean(valid_adv_specific).detach().item(),
-                "critic/advantages_wo_pp/max": torch.max(valid_adv_specific).detach().item(),
-                "critic/advantages_wo_pp/min": torch.min(valid_adv_specific).detach().item(),
-            }
+        
+        additional_metrics = {
+            "critic/advantages_wo-grpo/mean": torch.mean(valid_adv_specific).detach().item(),
+            "critic/advantages_wo-grpo/max": torch.max(valid_adv_specific).detach().item(),
+            "critic/advantages_wo-grpo/min": torch.min(valid_adv_specific).detach().item(),
+        }
 
     if use_critic:
         values = batch.batch["values"]
