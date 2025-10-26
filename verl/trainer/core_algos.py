@@ -223,6 +223,15 @@ def compute_bw_grpo_outcome_advantage(
     
     # First compute the original GRPO advantages for statistics
     scores = token_level_rewards.sum(dim=-1)
+    
+    # Check for NaN in input rewards
+    if torch.isnan(scores).any():
+        nan_count = torch.isnan(scores).sum().item()
+        print(f"⚠️ Warning: Found {nan_count} NaN values in scores (input rewards)")
+        print(f"   NaN indices: {torch.where(torch.isnan(scores))[0].tolist()}")
+        print(f"   Scores: {scores}")
+        # Replace NaN with 0 to prevent propagation
+        scores = torch.nan_to_num(scores, nan=0.0)
     id2score = defaultdict(list)
     id2idx_list = defaultdict(list)  # Track indices for each group
     id2mean, id2std = {}, {}
@@ -240,9 +249,26 @@ def compute_bw_grpo_outcome_advantage(
     # Compute original GRPO advantages (normalized scores)
     original_scores = scores.clone()
     for i in range(bsz):
-        original_scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
+        idx = index[i]
+        # If std is 0 (all samples in group have same score), set advantage to 0
+        # This prevents division by very small numbers causing numerical issues
+        if id2std[idx] < eps:
+            original_scores[i] = 0.0
+        else:
+            original_scores[i] = (scores[i] - id2mean[idx]) / id2std[idx]
 
     advantages_original = original_scores.unsqueeze(-1) * response_mask
+    
+    # Check for NaN after computing original advantages
+    if torch.isnan(original_scores).any():
+        nan_count = torch.isnan(original_scores).sum().item()
+        print(f"⚠️ Warning: Found {nan_count} NaN values in original_scores (after normalization)")
+        print(f"   NaN indices: {torch.where(torch.isnan(original_scores))[0].tolist()}")
+        # This should not happen after the fix, but log it if it does
+        for i in range(bsz):
+            if torch.isnan(original_scores[i]):
+                idx = index[i]
+                print(f"   Sample {i}: score={scores[i]}, mean={id2mean[idx]}, std={id2std[idx]}")
 
     # Compute best-winner advantages and winner mask
     # For each group:
