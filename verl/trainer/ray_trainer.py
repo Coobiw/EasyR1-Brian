@@ -791,6 +791,15 @@ class RayPPOTrainer:
 
                         # we combine with rule-based rm
                         reward_tensor, reward_metrics = self.reward_fn(batch)
+                        
+                        # Check for NaN in reward_tensor
+                        if torch.isnan(reward_tensor).any():
+                            nan_count = torch.isnan(reward_tensor).sum().item()
+                            total_elements = reward_tensor.numel()
+                            print(f"⚠️ Warning: Found {nan_count}/{total_elements} NaN values in reward_tensor at step {self.global_steps}")
+                            print(f"   Replacing NaN with 0.0 to prevent training crash")
+                            reward_tensor = torch.nan_to_num(reward_tensor, nan=0.0)
+                        
                         batch.batch["token_level_scores"] = reward_tensor
                         reward_metrics = {
                             f"reward/{key}": value for key, value in reduce_metrics(reward_metrics).items()
