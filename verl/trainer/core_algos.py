@@ -136,43 +136,139 @@ def compute_gae_advantage_return(
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
 @torch.no_grad()
 def compute_grpo_outcome_advantage(
-    token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    token_level_rewards: torch.Tensor, 
+    response_mask: torch.Tensor, 
+    index: torch.Tensor, 
+    eps: float = 1e-6,
+    keep_neg_ratio: float = 1.0
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute advantage for GRPO, operating only on Outcome reward
     (with only one scalar reward for each response).
+    
+    Strategy:
+    - Compute standard GRPO advantages (normalized scores)
+    - If keep_neg_ratio < 1.0:
+      1. Keep ALL positive samples (advantage > 0)
+      2. Keep a portion of negative samples (advantage < 0) based on keep_neg_ratio
 
     Args:
         token_level_rewards: `(torch.Tensor)`
             shape: (bs, response_length)
         response_mask: `(torch.Tensor)`
             shape: (bs, response_length)
+        index: `(torch.Tensor)`
+            Group index for each sample
+        eps: `(float)`
+            Small value for numerical stability
+        keep_neg_ratio: `(float)`
+            Ratio of negative samples to keep (0.0 to 1.0)
+            1.0 = keep all (standard GRPO), 0.5 = keep worst 50% of negative samples
 
     Returns:
         advantages: `(torch.Tensor)`
-            shape: (bs, response_length)
+            shape: (bs, response_length) - GRPO advantages (filtered samples have 0 if keep_neg_ratio < 1.0)
         returns: `(torch.Tensor)`
             shape: (bs, response_length)
+        advantages_original: `(torch.Tensor)`
+            shape: (bs, response_length) - original GRPO advantages for metrics (before filtering)
+        winner_mask: `(torch.Tensor)`
+            shape: (bs, response_length) - mask indicating kept samples (1=kept, 0=filtered)
 
     """
+    # Validate keep_neg_ratio is in [0, 1]
+    assert 0.0 <= keep_neg_ratio <= 1.0, f"keep_neg_ratio must be in [0, 1], got {keep_neg_ratio}"
+    
     scores = token_level_rewards.sum(dim=-1)
+    
+    # Check for NaN in input rewards
+    if torch.isnan(scores).any():
+        nan_count = torch.isnan(scores).sum().item()
+        print(f"⚠️ Warning: Found {nan_count} NaN values in GRPO scores (input rewards)")
+        print(f"   NaN indices: {torch.where(torch.isnan(scores))[0].tolist()}")
+        scores = torch.nan_to_num(scores, nan=0.0)
+    
     id2score = defaultdict(list)
+    id2idx_list = defaultdict(list)  # Track indices for each group
     id2mean, id2std = {}, {}
 
     bsz = scores.shape[0]
     for i in range(bsz):
         id2score[index[i]].append(scores[i])
+        id2idx_list[index[i]].append(i)
 
     for idx in id2score:
         assert len(id2score[idx]) > 1, "GRPO needs rollout.n > 1."
         id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
         id2std[idx] = torch.std(torch.tensor(id2score[idx]))
 
+    # Compute GRPO advantages (normalized scores)
+    original_scores = scores.clone()
     for i in range(bsz):
-        scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
+        idx = index[i]
+        # If std is 0 (all samples in group have same score), set advantage to 0
+        if id2std[idx] < eps:
+            original_scores[i] = 0.0
+        else:
+            original_scores[i] = (scores[i] - id2mean[idx]) / id2std[idx]
 
-    returns = scores.unsqueeze(-1) * response_mask
-    return returns, returns
+    advantages_original = original_scores.unsqueeze(-1) * response_mask
+    
+    # If keep_neg_ratio == 1.0, keep all samples (standard GRPO)
+    if keep_neg_ratio >= 1.0:
+        returns = original_scores.unsqueeze(-1) * response_mask
+        winner_mask = torch.ones_like(original_scores).unsqueeze(-1) * response_mask
+        return returns, returns, advantages_original, winner_mask
+    
+    # Filter negative samples based on keep_neg_ratio
+    filtered_advantages = torch.zeros_like(original_scores)
+    sample_mask = torch.zeros_like(original_scores)  # 1 for kept samples, 0 for filtered
+    
+    for idx in id2score:
+        group_indices = id2idx_list[idx]
+        group_advantages = torch.tensor([original_scores[i] for i in group_indices])
+        
+        # Separate positive and negative samples
+        positive_samples = []  # (local_idx, global_idx, advantage)
+        negative_samples = []  # (local_idx, global_idx, advantage)
+        
+        for local_idx, global_idx in enumerate(group_indices):
+            adv = group_advantages[local_idx]
+            if adv > 0:
+                positive_samples.append((local_idx, global_idx, adv))
+            elif adv < 0:
+                negative_samples.append((local_idx, global_idx, adv))
+            # adv == 0: keep it (neutral)
+        
+        # Keep ALL positive samples
+        for _, global_idx, _ in positive_samples:
+            filtered_advantages[global_idx] = original_scores[global_idx]
+            sample_mask[global_idx] = 1.0
+        
+        # Keep zero-advantage samples
+        for local_idx, global_idx in enumerate(group_indices):
+            if group_advantages[local_idx] == 0.0:
+                filtered_advantages[global_idx] = 0.0
+                sample_mask[global_idx] = 1.0
+        
+        # Keep a portion of negative samples based on keep_neg_ratio
+        if len(negative_samples) > 0 and keep_neg_ratio > 0.0:
+            # Sort negative samples by advantage (ascending order - worst first)
+            negative_samples.sort(key=lambda x: x[2])
+            
+            # Calculate how many negative samples to keep
+            num_neg_to_keep = max(1, int(len(negative_samples) * keep_neg_ratio)) if keep_neg_ratio < 1.0 else len(negative_samples)
+            
+            # Keep the worst negative samples
+            for i in range(num_neg_to_keep):
+                _, global_idx, _ = negative_samples[i]
+                filtered_advantages[global_idx] = original_scores[global_idx]
+                sample_mask[global_idx] = 1.0
+
+    returns = filtered_advantages.unsqueeze(-1) * response_mask
+    winner_mask = sample_mask.unsqueeze(-1) * response_mask  # Broadcast to token level
+    
+    return returns, returns, advantages_original, winner_mask
 
 
 @torch.no_grad()
