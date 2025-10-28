@@ -160,6 +160,27 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
     # Add total number of samples for reference
     pos_neg_metrics["sample_distribution/total"] = num_positive + num_negative
     
+    # If using keep_neg_ratio (i.e., some samples are filtered), also compute distribution for kept samples
+    if "winner_mask" in batch.batch:
+        # winner_mask indicates which samples are actually used for training (not filtered)
+        # Compute sample-level mask: a sample is "kept" if any of its tokens has winner_mask=1
+        sample_kept_mask = (batch.batch["winner_mask"] * response_mask).sum(dim=-1) > 0
+        
+        # Compute kept sample distribution
+        kept_positive_mask = positive_mask & sample_kept_mask
+        kept_negative_mask = negative_mask & sample_kept_mask
+        
+        num_kept_positive = kept_positive_mask.sum().item()
+        num_kept_negative = kept_negative_mask.sum().item()
+        num_filtered = (~sample_kept_mask).sum().item()
+        
+        pos_neg_metrics.update({
+            "sample_distribution/num_kept_positive": num_kept_positive,
+            "sample_distribution/num_kept_negative": num_kept_negative,
+            "sample_distribution/num_filtered": num_filtered,
+            "sample_distribution/kept_total": num_kept_positive + num_kept_negative,
+        })
+    
     # For GRPO & BW-GRPO (with keep_neg_ratio < 1.0), also compute metrics for their filtered advantages
     additional_metrics = {}
     if "advantages_original" in batch.batch:
