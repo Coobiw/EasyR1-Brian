@@ -111,6 +111,55 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
     valid_adv = torch.masked_select(advantages_for_metrics, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
     
+    # Compute sample-level advantage (average over response tokens) for classification
+    # Shape: (batch_size,)
+    sample_advantages = (advantages_for_metrics * response_mask).sum(dim=-1) / response_mask.sum(dim=-1).clamp(min=1)
+    
+    # Classify samples as positive (adv > 0) or negative (adv < 0)
+    positive_mask = sample_advantages > 0
+    negative_mask = sample_advantages < 0
+    
+    num_positive = positive_mask.sum().item()
+    num_negative = negative_mask.sum().item()
+    
+    # Compute response length statistics for positive and negative samples
+    pos_neg_metrics = {}
+    
+    if num_positive > 0:
+        positive_response_length = response_length[positive_mask]
+        pos_neg_metrics.update({
+            "sample_distribution/num_positive": num_positive,
+            "response_length_positive/mean": torch.mean(positive_response_length).detach().item(),
+            "response_length_positive/max": torch.max(positive_response_length).detach().item(),
+            "response_length_positive/min": torch.min(positive_response_length).detach().item(),
+        })
+    else:
+        pos_neg_metrics.update({
+            "sample_distribution/num_positive": 0,
+            "response_length_positive/mean": 0.0,
+            "response_length_positive/max": 0.0,
+            "response_length_positive/min": 0.0,
+        })
+    
+    if num_negative > 0:
+        negative_response_length = response_length[negative_mask]
+        pos_neg_metrics.update({
+            "sample_distribution/num_negative": num_negative,
+            "response_length_negative/mean": torch.mean(negative_response_length).detach().item(),
+            "response_length_negative/max": torch.max(negative_response_length).detach().item(),
+            "response_length_negative/min": torch.min(negative_response_length).detach().item(),
+        })
+    else:
+        pos_neg_metrics.update({
+            "sample_distribution/num_negative": 0,
+            "response_length_negative/mean": 0.0,
+            "response_length_negative/max": 0.0,
+            "response_length_negative/min": 0.0,
+        })
+    
+    # Add total number of samples for reference
+    pos_neg_metrics["sample_distribution/total"] = num_positive + num_negative
+    
     # For GRPO & BW-GRPO (with keep_neg_ratio < 1.0), also compute metrics for their filtered advantages
     additional_metrics = {}
     if "advantages_original" in batch.batch:
@@ -175,6 +224,8 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
         "prompt_length/max": torch.max(prompt_length).detach().item(),
         "prompt_length/min": torch.min(prompt_length).detach().item(),
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
+        # Positive/Negative sample distribution and response length statistics
+        **pos_neg_metrics,
         # GRPO & BW-GRPO filtered advantages metrics (when keep_neg_ratio < 1.0)
         **additional_metrics,
     }
