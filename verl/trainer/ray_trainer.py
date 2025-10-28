@@ -175,7 +175,15 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
             token_level_rewards, values, response_mask, gamma, lam
         )
     elif adv_estimator == AdvantageEstimator.GRPO:
-        advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards, response_mask, index)
+        # GRPO: compute advantages with optional negative sample filtering
+        # Support keep_neg_ratio: keep a portion of negative samples based on advantage ranking
+        advantages, returns, advantages_original, winner_mask = core_algos.compute_grpo_outcome_advantage(
+            token_level_rewards, response_mask, index, keep_neg_ratio=keep_neg_ratio
+        )
+        # Store original advantages for metrics (especially when keep_neg_ratio < 1.0)
+        data.batch["advantages_original"] = advantages_original
+        # Store winner mask for filtering loss computation (if keep_neg_ratio < 1.0)
+        data.batch["winner_mask"] = winner_mask
     elif adv_estimator == AdvantageEstimator.BW_GRPO:
         # Best-Winner GRPO: winner uses its original GRPO advantage value, others get 0 (keep_neg_ratio to keep negtive samples controlled by a ratio)
         # Support keep_neg_ratio: keep a portion of negative samples based on advantage ranking

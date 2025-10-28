@@ -69,7 +69,7 @@ class AlgorithmConfig:
     kl_type: str = "fixed"
     kl_horizon: float = 0.0
     kl_target: float = 0.0
-    keep_neg_ratio: float = 1.0  # BW-GRPO: ratio of negative samples to keep (1.0 = keep all)
+    keep_neg_ratio: float = 1.0  # GRPO & BW-GRPO: ratio of negative samples to keep (1.0 = keep all)
 
 
 @dataclass
@@ -126,12 +126,12 @@ class PPOConfig:
                 f"0.0 means discard all negative samples, 1.0 means keep all negative samples."
             )
         
-        # Validate keep_neg_ratio: only supported for bw_grpo
-        if self.algorithm.adv_estimator != "bw_grpo" and self.algorithm.keep_neg_ratio != 1.0:
+        # Validate keep_neg_ratio: only supported for grpo and bw_grpo
+        if self.algorithm.adv_estimator not in ["grpo", "bw_grpo"] and self.algorithm.keep_neg_ratio != 1.0:
             raise ValueError(
-                f"keep_neg_ratio is currently only supported for bw_grpo algorithm. "
+                f"keep_neg_ratio is currently only supported for grpo and bw_grpo algorithms. "
                 f"Got adv_estimator='{self.algorithm.adv_estimator}' with keep_neg_ratio={self.algorithm.keep_neg_ratio}. "
-                f"Please either set adv_estimator='bw_grpo' or set keep_neg_ratio=1.0."
+                f"Please either set adv_estimator='grpo' or 'bw_grpo', or set keep_neg_ratio=1.0."
             )
 
     def deep_post_init(self):
