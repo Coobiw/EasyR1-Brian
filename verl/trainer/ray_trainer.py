@@ -763,13 +763,19 @@ class RayPPOTrainer:
         num_total_prompts = len(prompt_uid2scores)
         num_kept_prompts = len(kept_prompt_uids)
         
-        # Filter trajectories
-        kept_traj_idxs = []
+        # Filter trajectories by creating a new batch with kept items
+        kept_batches = []
         for idx, traj_uid in enumerate(uids):
             if traj_uid in kept_prompt_uids:
-                kept_traj_idxs.append(idx)
+                kept_batches.append(batch[idx:idx+1])  # Use slice to get DataProto
         
-        filtered_batch = batch[kept_traj_idxs]
+        if len(kept_batches) == 0:
+            # No prompts kept, return empty-like batch
+            filtered_batch = batch[0:0]  # Empty batch with same structure
+        elif len(kept_batches) == 1:
+            filtered_batch = kept_batches[0]
+        else:
+            filtered_batch = DataProto.concat(kept_batches)
         
         return filtered_batch, num_kept_prompts, num_total_prompts
 
@@ -892,7 +898,9 @@ class RayPPOTrainer:
                             if accumulated_batch is None:
                                 accumulated_batch = filtered_batch
                             else:
-                                accumulated_batch = DataProto.concat([accumulated_batch, filtered_batch])
+                                # Only concat if filtered_batch is not empty
+                                if len(filtered_batch.batch) > 0:
+                                    accumulated_batch = DataProto.concat([accumulated_batch, filtered_batch])
                             
                             num_accumulated_prompts += num_kept
                             
@@ -906,7 +914,12 @@ class RayPPOTrainer:
                             if num_accumulated_prompts >= target_prompt_num:
                                 # Align to exact batch size
                                 target_traj_num = target_prompt_num * rollout_n
-                                batch = accumulated_batch[:target_traj_num]
+                                # Ensure we don't exceed accumulated batch size
+                                actual_traj_num = min(target_traj_num, len(accumulated_batch.batch))
+                                if actual_traj_num < len(accumulated_batch.batch):
+                                    batch = accumulated_batch[:actual_traj_num]
+                                else:
+                                    batch = accumulated_batch
                                 print(f"[Dynamic Sampling] Accumulated enough prompts, proceeding with {len(batch.batch)} trajectories")
                                 break  # Exit accumulation loop
                             else:
