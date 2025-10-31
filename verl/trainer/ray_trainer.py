@@ -902,36 +902,40 @@ class RayPPOTrainer:
                                 if len(filtered_batch.batch) > 0:
                                     accumulated_batch = DataProto.concat([accumulated_batch, filtered_batch])
                             
-                            num_accumulated_prompts += num_kept
+                            # Calculate complete prompts based on actual trajectories
+                            # CRITICAL: Must ensure trajectories are multiples of rollout_n
+                            num_complete_prompts = len(accumulated_batch.batch) // rollout_n if accumulated_batch is not None else 0
+                            num_accumulated_prompts = num_complete_prompts  # Update based on complete prompts
                             
                             print(
                                 f"[Dynamic Sampling] Step {self.global_step}, Gen batch {num_gen_batches}: "
                                 f"Kept {num_kept}/{num_total} prompts (filtered {num_filtered} trajectories), "
-                                f"Accumulated: {num_accumulated_prompts}/{target_prompt_num}"
+                                f"Accumulated: {num_complete_prompts}/{target_prompt_num} complete prompts "
+                                f"({len(accumulated_batch.batch)} trajectories)"
                             )
                             
-                            # Check if we have enough prompts
-                            if num_accumulated_prompts >= target_prompt_num:
-                                # Align to exact batch size
+                            # Check if we have enough complete prompts
+                            if num_complete_prompts >= target_prompt_num:
+                                # Truncate to exactly target_prompt_num complete prompts
                                 target_traj_num = target_prompt_num * rollout_n
-                                # Ensure we don't exceed accumulated batch size
-                                actual_traj_num = min(target_traj_num, len(accumulated_batch.batch))
-                                if actual_traj_num < len(accumulated_batch.batch):
-                                    batch = accumulated_batch[:actual_traj_num]
-                                else:
-                                    batch = accumulated_batch
-                                print(f"[Dynamic Sampling] Accumulated enough prompts, proceeding with {len(batch.batch)} trajectories")
+                                batch = accumulated_batch[:target_traj_num]
+                                print(
+                                    f"[Dynamic Sampling] Accumulated enough, using {target_prompt_num} prompts "
+                                    f"({len(batch.batch)} trajectories)"
+                                )
                                 break  # Exit accumulation loop
                             else:
                                 # Need more prompts, check if we can continue
                                 max_gen_batches = self.config.algorithm.dynamic_sample_max_gen_batches
                                 if max_gen_batches > 0 and num_gen_batches >= max_gen_batches:
+                                    # Reached limit, use what we have (complete prompts only)
+                                    final_traj_num = num_complete_prompts * rollout_n
+                                    batch = accumulated_batch[:final_traj_num]
                                     print(
                                         f"⚠️ [Dynamic Sampling] Reached max_gen_batches={max_gen_batches}, "
-                                        f"but only have {num_accumulated_prompts}/{target_prompt_num} prompts. "
-                                        f"Using what we have."
+                                        f"using {num_complete_prompts}/{target_prompt_num} complete prompts "
+                                        f"({len(batch.batch)} trajectories)"
                                     )
-                                    batch = accumulated_batch
                                     break
                                 else:
                                     # Continue to next batch
@@ -939,8 +943,13 @@ class RayPPOTrainer:
                                     try:
                                         batch_dict = next(dataloader_iter)
                                     except StopIteration:
-                                        print(f"⚠️ [Dynamic Sampling] Dataloader exhausted, using accumulated {num_accumulated_prompts} prompts")
-                                        batch = accumulated_batch
+                                        # Dataloader exhausted, use complete prompts only
+                                        final_traj_num = num_complete_prompts * rollout_n
+                                        batch = accumulated_batch[:final_traj_num]
+                                        print(
+                                            f"⚠️ [Dynamic Sampling] Dataloader exhausted, using {num_complete_prompts} complete prompts "
+                                            f"({len(batch.batch)} trajectories)"
+                                        )
                                         break
                                     continue  # Continue accumulation loop
                     else:
@@ -951,14 +960,16 @@ class RayPPOTrainer:
                 with _timer("step", timing_raw):
                     # Record dynamic sampling metrics
                     if self.config.algorithm.use_dynamic_sample:
+                        actual_num_prompts = len(batch.batch) // rollout_n
                         metrics.update({
                             "dynamic_sampling/num_gen_batches": num_gen_batches,
-                            "dynamic_sampling/num_accumulated_prompts": num_accumulated_prompts,
+                            "dynamic_sampling/num_prompts_used": actual_num_prompts,
+                            "dynamic_sampling/num_trajectories_used": len(batch.batch),
                             "dynamic_sampling/target_prompt_num": target_prompt_num,
                         })
                     
                     # Log training rollout generations (before balance to preserve order)
-                    self._maybe_log_train_generations(batch, reward_tensor.sum(dim=-1))
+                    self._maybe_log_train_generations(batch, batch.batch["token_level_scores"].sum(dim=-1))
 
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
