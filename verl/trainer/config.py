@@ -70,6 +70,8 @@ class AlgorithmConfig:
     kl_horizon: float = 0.0
     kl_target: float = 0.0
     keep_neg_ratio: float = 1.0  # GRPO & BW-GRPO: ratio of negative samples to keep (1.0 = keep all)
+    use_dynamic_sample: bool = False  # DAPO: filter out prompts with all same scores (std=0) and accumulate batches
+    dynamic_sample_max_gen_batches: int = 3  # max number of generation batches to accumulate (0 for unlimited)
 
 
 @dataclass

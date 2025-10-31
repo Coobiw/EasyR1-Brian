@@ -722,6 +722,57 @@ class RayPPOTrainer:
         )
         metrics.update(global_balance_stats)
 
+    def _filter_batch_by_score_std(self, batch: DataProto) -> Tuple[DataProto, int, int]:
+        """
+        Filter out prompts where all trajectories have the same score (std=0).
+        This implements DAPO's dynamic sampling strategy.
+        
+        Uses token_level_scores (before KL penalty) to compute sequence-level scores.
+        
+        Args:
+            batch: DataProto with 'uid' in non_tensor_batch and 'token_level_scores' in batch
+        
+        Returns:
+            filtered_batch: DataProto with filtered trajectories  
+            num_kept_prompts: number of prompts kept after filtering
+            num_total_prompts: total number of unique prompts before filtering
+        """
+        if "token_level_scores" not in batch.batch:
+            raise ValueError("token_level_scores not found in batch, cannot perform dynamic sampling")
+        
+        if "uid" not in batch.non_tensor_batch:
+            raise ValueError("uid not found in non_tensor_batch, cannot perform dynamic sampling")
+        
+        # Compute sequence-level scores (sum over tokens)
+        seq_scores = batch.batch["token_level_scores"].sum(dim=-1).cpu().numpy()
+        uids = batch.non_tensor_batch["uid"]
+        
+        # Group scores by prompt UID
+        prompt_uid2scores = defaultdict(list)
+        for uid, score in zip(uids, seq_scores):
+            prompt_uid2scores[uid].append(score)
+        
+        # Compute std for each prompt and filter
+        kept_prompt_uids = []
+        for prompt_uid, scores in prompt_uid2scores.items():
+            std = np.std(scores)
+            # Keep if std > 0 (有差异) or only single trajectory
+            if std > 0 or len(scores) == 1:
+                kept_prompt_uids.append(prompt_uid)
+        
+        num_total_prompts = len(prompt_uid2scores)
+        num_kept_prompts = len(kept_prompt_uids)
+        
+        # Filter trajectories
+        kept_traj_idxs = []
+        for idx, traj_uid in enumerate(uids):
+            if traj_uid in kept_prompt_uids:
+                kept_traj_idxs.append(idx)
+        
+        filtered_batch = batch[kept_traj_idxs]
+        
+        return filtered_batch, num_kept_prompts, num_total_prompts
+
     def fit(self):
         """
         The training loop of PPO.
@@ -744,28 +795,45 @@ class RayPPOTrainer:
                 return
 
         for _ in tqdm(range(self.config.trainer.total_episodes), desc="Episode", position=0):
-            for batch_dict in tqdm(self.train_dataloader, desc="Running step", position=1):
+            dataloader_iter = iter(tqdm(self.train_dataloader, desc="Running step", position=1))
+            
+            while True:
+                try:
+                    batch_dict = next(dataloader_iter)
+                except StopIteration:
+                    break
+                
                 self.global_step += 1
                 if self.global_step > self.training_steps:
                     break
 
                 metrics, timing_raw = {}, {}
-                batch: DataProto = DataProto.from_single_dict(batch_dict)
+                
+                # For dynamic sampling: accumulate batches until we have enough prompts
+                accumulated_batch = None
+                num_accumulated_prompts = 0
+                num_gen_batches = 0
+                target_prompt_num = self.config.data.rollout_batch_size
+                rollout_n = self.config.worker.rollout.n
+                
+                while True:  # Accumulation loop for dynamic sampling
+                    num_gen_batches += 1
+                    
+                    # Process current batch
+                    new_batch: DataProto = DataProto.from_single_dict(batch_dict)
 
-                # pop those keys for generation
-                if "multi_modal_data" in batch.non_tensor_batch.keys():
-                    gen_batch = batch.pop(
-                        batch_keys=["input_ids", "attention_mask", "position_ids"],
-                        non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
-                    )
-                else:
-                    gen_batch = batch.pop(
-                        batch_keys=["input_ids", "attention_mask", "position_ids"],
-                        non_tensor_batch_keys=["raw_prompt_ids"],
-                    )
+                    # pop those keys for generation
+                    if "multi_modal_data" in new_batch.non_tensor_batch.keys():
+                        gen_batch = new_batch.pop(
+                            batch_keys=["input_ids", "attention_mask", "position_ids"],
+                            non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
+                        )
+                    else:
+                        gen_batch = new_batch.pop(
+                            batch_keys=["input_ids", "attention_mask", "position_ids"],
+                            non_tensor_batch_keys=["raw_prompt_ids"],
+                        )
 
-                with _timer("step", timing_raw):
-                    # generate a batch
                     with _timer("gen", timing_raw):  # wg: worker group
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
 
@@ -776,21 +844,21 @@ class RayPPOTrainer:
                             gen_baseline_batch.meta_info["n"] = 1
                             gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
 
-                            batch = batch.union(gen_baseline_output)
-                            reward_baseline_tensor, _ = self.reward_fn(batch)
+                            new_batch = new_batch.union(gen_baseline_output)
+                            reward_baseline_tensor, _ = self.reward_fn(new_batch)
                             reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)
 
-                            batch.pop(batch_keys=list(gen_baseline_output.batch.keys()))
-                            batch.batch["reward_baselines"] = reward_baseline_tensor
+                            new_batch.pop(batch_keys=list(gen_baseline_output.batch.keys()))
+                            new_batch.batch["reward_baselines"] = reward_baseline_tensor
                             del gen_baseline_batch, gen_baseline_output
 
-                    batch.non_tensor_batch["uid"] = np.array(
-                        [str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object
+                    new_batch.non_tensor_batch["uid"] = np.array(
+                        [str(uuid.uuid4()) for _ in range(len(new_batch.batch))], dtype=object
                     )
                     # repeat to align with repeated responses in rollout
-                    batch = batch.repeat(repeat_times=self.config.worker.rollout.n, interleave=True)
-                    batch = batch.union(gen_batch_output)
-                    batch.non_tensor_batch.pop("multi_modal_data", None)
+                    new_batch = new_batch.repeat(repeat_times=rollout_n, interleave=True)
+                    new_batch = new_batch.union(gen_batch_output)
+                    new_batch.non_tensor_batch.pop("multi_modal_data", None)
 
                     # compute reward
                     with _timer("reward", timing_raw):
@@ -798,7 +866,7 @@ class RayPPOTrainer:
                             raise NotImplementedError("Reward model is not supported yet.")
 
                         # we combine with rule-based rm
-                        reward_tensor, reward_metrics = self.reward_fn(batch)
+                        reward_tensor, reward_metrics = self.reward_fn(new_batch)
                         
                         # Check for NaN in reward_tensor
                         if torch.isnan(reward_tensor).any():
@@ -808,11 +876,73 @@ class RayPPOTrainer:
                             print(f"   Replacing NaN with 0.0 to prevent training crash")
                             reward_tensor = torch.nan_to_num(reward_tensor, nan=0.0)
                         
-                        batch.batch["token_level_scores"] = reward_tensor
+                        new_batch.batch["token_level_scores"] = reward_tensor
                         reward_metrics = {
                             f"reward/{key}": value for key, value in reduce_metrics(reward_metrics).items()
                         }
                         metrics.update(reward_metrics)
+                    
+                    # Dynamic sampling: filter out prompts with std=0
+                    if self.config.algorithm.use_dynamic_sample:
+                        with _timer("dynamic_sampling_filter", timing_raw):
+                            filtered_batch, num_kept, num_total = self._filter_batch_by_score_std(new_batch)
+                            num_filtered = len(new_batch.batch) - len(filtered_batch.batch)
+                            
+                            # Accumulate filtered batch
+                            if accumulated_batch is None:
+                                accumulated_batch = filtered_batch
+                            else:
+                                accumulated_batch = DataProto.concat([accumulated_batch, filtered_batch])
+                            
+                            num_accumulated_prompts += num_kept
+                            
+                            print(
+                                f"[Dynamic Sampling] Step {self.global_step}, Gen batch {num_gen_batches}: "
+                                f"Kept {num_kept}/{num_total} prompts (filtered {num_filtered} trajectories), "
+                                f"Accumulated: {num_accumulated_prompts}/{target_prompt_num}"
+                            )
+                            
+                            # Check if we have enough prompts
+                            if num_accumulated_prompts >= target_prompt_num:
+                                # Align to exact batch size
+                                target_traj_num = target_prompt_num * rollout_n
+                                batch = accumulated_batch[:target_traj_num]
+                                print(f"[Dynamic Sampling] Accumulated enough prompts, proceeding with {len(batch.batch)} trajectories")
+                                break  # Exit accumulation loop
+                            else:
+                                # Need more prompts, check if we can continue
+                                max_gen_batches = self.config.algorithm.dynamic_sample_max_gen_batches
+                                if max_gen_batches > 0 and num_gen_batches >= max_gen_batches:
+                                    print(
+                                        f"⚠️ [Dynamic Sampling] Reached max_gen_batches={max_gen_batches}, "
+                                        f"but only have {num_accumulated_prompts}/{target_prompt_num} prompts. "
+                                        f"Using what we have."
+                                    )
+                                    batch = accumulated_batch
+                                    break
+                                else:
+                                    # Continue to next batch
+                                    print(f"[Dynamic Sampling] Need more prompts, fetching next batch...")
+                                    try:
+                                        batch_dict = next(dataloader_iter)
+                                    except StopIteration:
+                                        print(f"⚠️ [Dynamic Sampling] Dataloader exhausted, using accumulated {num_accumulated_prompts} prompts")
+                                        batch = accumulated_batch
+                                        break
+                                    continue  # Continue accumulation loop
+                    else:
+                        # No dynamic sampling, use new_batch directly
+                        batch = new_batch
+                        break  # Exit accumulation loop
+                
+                with _timer("step", timing_raw):
+                    # Record dynamic sampling metrics
+                    if self.config.algorithm.use_dynamic_sample:
+                        metrics.update({
+                            "dynamic_sampling/num_gen_batches": num_gen_batches,
+                            "dynamic_sampling/num_accumulated_prompts": num_accumulated_prompts,
+                            "dynamic_sampling/target_prompt_num": target_prompt_num,
+                        })
                     
                     # Log training rollout generations (before balance to preserve order)
                     self._maybe_log_train_generations(batch, reward_tensor.sum(dim=-1))
