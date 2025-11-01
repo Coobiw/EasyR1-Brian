@@ -977,7 +977,16 @@ class RayPPOTrainer:
                                 # Need more prompts, check if we can continue
                                 max_gen_batches = self.config.algorithm.dynamic_sample_max_gen_batches
                                 if max_gen_batches > 0 and num_gen_batches >= max_gen_batches:
-                                    # Reached limit, use what we have (complete prompts only)
+                                    # Reached limit, check if we have any complete prompts
+                                    if num_complete_prompts == 0:
+                                        print(
+                                            f"❌ [Dynamic Sampling] Reached max_gen_batches={max_gen_batches}, "
+                                            f"but have 0 complete prompts! Skipping this training step."
+                                        )
+                                        # Skip this step - set batch to None and break
+                                        batch = None
+                                        break
+                                    
                                     final_traj_num = num_complete_prompts * rollout_n
                                     batch = accumulated_batch[:final_traj_num]
                                     print(
@@ -992,7 +1001,15 @@ class RayPPOTrainer:
                                     try:
                                         batch_dict = next(dataloader_iter)
                                     except StopIteration:
-                                        # Dataloader exhausted, use complete prompts only
+                                        # Dataloader exhausted, check if we have any complete prompts
+                                        if num_complete_prompts == 0:
+                                            print(
+                                                f"❌ [Dynamic Sampling] Dataloader exhausted with 0 complete prompts! "
+                                                f"Skipping this training step."
+                                            )
+                                            batch = None
+                                            break
+                                        
                                         final_traj_num = num_complete_prompts * rollout_n
                                         batch = accumulated_batch[:final_traj_num]
                                         print(
@@ -1006,6 +1023,34 @@ class RayPPOTrainer:
                         batch = new_batch
                         break  # Exit accumulation loop
                 
+                # Skip this step if batch is None (no valid data after dynamic sampling)
+                if batch is None:
+                    print(f"⚠️ Skipping step {self.global_step} due to insufficient data after dynamic sampling")
+                    metrics.update({
+                        "dynamic_sampling/num_gen_batches": num_gen_batches,
+                        "dynamic_sampling/skipped": 1,
+                    })
+                    self.logger.log(data=metrics, step=self.global_step)
+                    continue  # Skip to next step
+                
+                # Check if batch size meets minimum requirements
+                min_batch_size = self.config.worker.actor.global_batch_size
+                if self.use_critic:
+                    min_batch_size = max(min_batch_size, self.config.worker.critic.global_batch_size)
+                
+                if len(batch.batch) < min_batch_size:
+                    print(
+                        f"⚠️ Skipping step {self.global_step}: batch size {len(batch.batch)} < "
+                        f"minimum required {min_batch_size}"
+                    )
+                    metrics.update({
+                        "dynamic_sampling/num_gen_batches": num_gen_batches if self.config.algorithm.use_dynamic_sample else 1,
+                        "dynamic_sampling/skipped": 1,
+                        "dynamic_sampling/reason": "batch_too_small",
+                    })
+                    self.logger.log(data=metrics, step=self.global_step)
+                    continue  # Skip to next step
+                
                 with _timer("step", timing_raw):
                     # Record dynamic sampling metrics
                     if self.config.algorithm.use_dynamic_sample:
@@ -1015,6 +1060,7 @@ class RayPPOTrainer:
                             "dynamic_sampling/num_prompts_used": actual_num_prompts,
                             "dynamic_sampling/num_trajectories_used": len(batch.batch),
                             "dynamic_sampling/target_prompt_num": target_prompt_num,
+                            "dynamic_sampling/skipped": 0,
                         })
                     
                     # Log training rollout generations (before balance to preserve order)
