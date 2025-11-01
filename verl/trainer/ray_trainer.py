@@ -19,7 +19,7 @@ This trainer supports model-agonistic model initialization with huggingface
 import json
 import os
 import uuid
-from collections import defaultdict
+from collections import defaultdict, Counter
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -535,7 +535,7 @@ class RayPPOTrainer:
             "val/extraction_answer_error": error_count,
         }
         if len(y_out) > 0 and len(y_label) > 0:
-            print(f"Computing AGIQA-3K metrics on {len(y_out)} valid samples (errors: {error_count})")
+            print(f"Computing IQA metrics on {len(y_out)} valid samples (errors: {error_count})")
             
             # Compute quality assessment metrics
             plcc, srcc, main_score = quality_assessment_metrics(y_out, y_label)
@@ -545,7 +545,7 @@ class RayPPOTrainer:
                 "val/main_score": main_score,
             })
             
-            print(f"AGIQA-3K Metrics: PLCC={plcc:.4f}, SRCC={srcc:.4f}, MainScore={main_score:.4f}")
+            print(f"IQA Metrics: PLCC={plcc:.4f}, SRCC={srcc:.4f}, MainScore={main_score:.4f}")
         else:
             print(f"Warning: No valid predictions extracted for AGIQA-3K metrics (errors: {error_count})")
         
@@ -764,6 +764,7 @@ class RayPPOTrainer:
         num_kept_prompts = len(kept_prompt_uids)
         
         # Filter trajectories by creating a new batch with kept items
+        # CRITICAL: Ensure we keep complete prompts (rollout_n trajectories per prompt)
         kept_batches = []
         for idx, traj_uid in enumerate(uids):
             if traj_uid in kept_prompt_uids:
@@ -776,6 +777,31 @@ class RayPPOTrainer:
             filtered_batch = kept_batches[0]
         else:
             filtered_batch = DataProto.concat(kept_batches)
+        
+        # CRITICAL ASSERTION: Verify the filtered batch has complete prompts
+        # Each prompt should have exactly rollout_n trajectories
+        # Calculate rollout_n from the data
+        if len(filtered_batch.batch) > 0:
+            # Count trajectories per unique uid
+            uid_counts = Counter(filtered_batch.non_tensor_batch["uid"])
+            rollout_n_values = list(uid_counts.values())
+            
+            # All prompts should have the same number of trajectories
+            if len(set(rollout_n_values)) > 1:
+                raise RuntimeError(
+                    f"Inconsistent rollout_n detected: {uid_counts}. "
+                    f"Some prompts have different numbers of trajectories!"
+                )
+            
+            inferred_rollout_n = rollout_n_values[0] if rollout_n_values else 1
+            
+            # Verify total is a multiple of rollout_n
+            if len(filtered_batch.batch) % inferred_rollout_n != 0:
+                raise RuntimeError(
+                    f"Filtered batch size {len(filtered_batch.batch)} is not a multiple of "
+                    f"inferred rollout_n={inferred_rollout_n}. "
+                    f"Unique prompts: {len(uid_counts)}, uid_counts: {uid_counts}"
+                )
         
         return filtered_batch, num_kept_prompts, num_total_prompts
 
@@ -858,13 +884,36 @@ class RayPPOTrainer:
                             new_batch.batch["reward_baselines"] = reward_baseline_tensor
                             del gen_baseline_batch, gen_baseline_output
 
-                    new_batch.non_tensor_batch["uid"] = np.array(
-                        [str(uuid.uuid4()) for _ in range(len(new_batch.batch))], dtype=object
-                    )
-                    # repeat to align with repeated responses in rollout
+                    # CRITICAL: vLLM's generate_sequences already repeats by rollout_n internally!
+                    # We should NOT repeat new_batch here, instead we need to:
+                    # 1. Generate one unique UID per original prompt
+                    # 2. Repeat the UIDs to match gen_batch_output (which is already repeated)
+                    
+                    prompt_count = len(new_batch.batch)
+                    unique_uids = [str(uuid.uuid4()) for _ in range(prompt_count)]
+                    
+                    # Repeat UIDs to align with gen_batch_output (which has rollout_n responses per prompt)
+                    repeated_uids = np.array([uid for uid in unique_uids for _ in range(rollout_n)], dtype=object)
+                    
+                    # Repeat new_batch to align with repeated responses in gen_batch_output
                     new_batch = new_batch.repeat(repeat_times=rollout_n, interleave=True)
+                    new_batch.non_tensor_batch["uid"] = repeated_uids
+                    
+                    # Verify alignment
+                    assert len(new_batch.batch) == len(gen_batch_output.batch), (
+                        f"Size mismatch: new_batch={len(new_batch.batch)}, gen_batch_output={len(gen_batch_output.batch)}"
+                    )
+                    
                     new_batch = new_batch.union(gen_batch_output)
                     new_batch.non_tensor_batch.pop("multi_modal_data", None)
+                    
+                    # Verify final uid distribution
+                    uid_counts = Counter(new_batch.non_tensor_batch["uid"])
+                    if len(set(uid_counts.values())) != 1 or list(uid_counts.values())[0] != rollout_n:
+                        raise RuntimeError(
+                            f"UID distribution error: Expected all uids to appear exactly {rollout_n} times, "
+                            f"but got: {uid_counts}"
+                        )
 
                     # compute reward
                     with _timer("reward", timing_raw):
