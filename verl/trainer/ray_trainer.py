@@ -70,7 +70,6 @@ class AdvantageEstimator(str, Enum):
 
     GAE = "gae"
     GRPO = "grpo"
-    BW_GRPO = "bw_grpo"  # Best-Winner GRPO: winner uses original GRPO advantage, others 0 (keep_neg_ratio to keep negtive samples controlled by a ratio)
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
     RLOO = "rloo"
@@ -165,7 +164,7 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.KLController, kl_penal
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0, keep_neg_ratio: float = 1.0):
+def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0, keep_neg_ratio: float = 1.0, keep_pos_ratio: float = 1.0):
     token_level_rewards = data.batch["token_level_rewards"]
     response_mask = data.batch["response_mask"]
     index = data.non_tensor_batch["uid"]
@@ -175,26 +174,15 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
             token_level_rewards, values, response_mask, gamma, lam
         )
     elif adv_estimator == AdvantageEstimator.GRPO:
-        # GRPO: compute advantages with optional negative sample filtering
-        # Support keep_neg_ratio: keep a portion of negative samples based on advantage ranking
+        # GRPO: compute advantages with optional positive and negative sample filtering
+        # Support keep_neg_ratio: keep a portion of negative samples based on advantage ranking (worst first)
+        # Support keep_pos_ratio: keep a portion of positive samples based on advantage ranking (best first)
         advantages, returns, advantages_original, winner_mask = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards, response_mask, index, keep_neg_ratio=keep_neg_ratio
+            token_level_rewards, response_mask, index, keep_neg_ratio=keep_neg_ratio, keep_pos_ratio=keep_pos_ratio
         )
-        # Store original advantages for metrics (especially when keep_neg_ratio < 1.0)
+        # Store original advantages for metrics (especially when keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0)
         data.batch["advantages_original"] = advantages_original
-        # Store winner mask for filtering loss computation (if keep_neg_ratio < 1.0)
-        data.batch["winner_mask"] = winner_mask
-    elif adv_estimator == AdvantageEstimator.BW_GRPO:
-        # Best-Winner GRPO: winner uses its original GRPO advantage value, others get 0 (keep_neg_ratio to keep negtive samples controlled by a ratio)
-        # Support keep_neg_ratio: keep a portion of negative samples based on advantage ranking
-        advantages_bw, returns, advantages_original, winner_mask = core_algos.compute_bw_grpo_outcome_advantage(
-            token_level_rewards, response_mask, index, keep_neg_ratio=keep_neg_ratio
-        )
-        # Use BW-GRPO advantages for training (stored in 'advantages')
-        advantages = advantages_bw
-        # Store original GRPO advantages for metrics comparison with other jobs
-        data.batch["advantages_original"] = advantages_original
-        # Store winner mask for filtering loss computation
+        # Store winner mask for filtering loss computation (if keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0)
         data.batch["winner_mask"] = winner_mask
     elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS:
         advantages, returns = core_algos.compute_reinforce_plus_plus_outcome_advantage(
@@ -301,10 +289,10 @@ class RayPPOTrainer:
                 )
 
         if (
-            config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.BW_GRPO, AdvantageEstimator.RLOO)
+            config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.RLOO)
             and config.worker.rollout.n == 1
         ):
-            raise ValueError("GRPO, BW-GRPO and RLOO algorithm need `config.worker.rollout.n > 1`.")
+            raise ValueError("GRPO and RLOO algorithm need `config.worker.rollout.n > 1`.")
 
         if config.trainer.max_steps is not None:
             self.training_steps = config.trainer.max_steps
@@ -860,6 +848,7 @@ class RayPPOTrainer:
                             gamma=self.config.algorithm.gamma,
                             lam=self.config.algorithm.lam,
                             keep_neg_ratio=self.config.algorithm.keep_neg_ratio,
+                            keep_pos_ratio=self.config.algorithm.keep_pos_ratio,
                         )
 
                     # update critic

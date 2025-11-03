@@ -95,7 +95,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
     advantages = batch.batch["advantages"]
     returns = batch.batch["returns"]
     
-    # For GRPO & BW-GRPO (with keep_neg_ratio < 1.0), use original advantages for metrics logging (to compare with other jobs)
+    # For GRPO (with keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0), use original advantages for metrics logging
     # The actual training uses filtered advantages stored in batch["advantages"]
     advantages_for_metrics = batch.batch.get("advantages_original", advantages)
 
@@ -181,15 +181,14 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
             "sample_distribution/kept_total": num_kept_positive + num_kept_negative,
         })
     
-    # For GRPO & BW-GRPO (with keep_neg_ratio < 1.0), also compute metrics for their filtered advantages
+    # For GRPO (with keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0), also compute metrics for their filtered advantages
     additional_metrics = {}
     if "advantages_original" in batch.batch:
-        # This means we're using GRPO or BW-GRPO with keep_neg_ratio < 1.0
-        # batch["advantages"] contains algorithm-specific advantages (used for training, with samples filtered)
+        # This means we're using GRPO with sample filtering (keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0)
+        # batch["advantages"] contains filtered advantages (used for training)
         valid_adv_specific = torch.masked_select(advantages, response_mask)
         
         # Compute metrics for filtered advantages
-        # Note: metric name keeps "bw-grpo" for backward compatibility, but applies to both GRPO and BW-GRPO
         additional_metrics = {
             "critic/advantages_processed/mean": torch.mean(valid_adv_specific).detach().item(),
             "critic/advantages_processed/max": torch.max(valid_adv_specific).detach().item(),
@@ -247,7 +246,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
         # Positive/Negative sample distribution and response length statistics
         **pos_neg_metrics,
-        # GRPO & BW-GRPO filtered advantages metrics (when keep_neg_ratio < 1.0)
+        # GRPO filtered advantages metrics (when keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0)
         **additional_metrics,
     }
     return metrics
