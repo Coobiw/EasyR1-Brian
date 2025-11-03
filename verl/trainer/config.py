@@ -69,7 +69,8 @@ class AlgorithmConfig:
     kl_type: str = "fixed"
     kl_horizon: float = 0.0
     kl_target: float = 0.0
-    keep_neg_ratio: float = 1.0  # GRPO & BW-GRPO: ratio of negative samples to keep (1.0 = keep all)
+    keep_neg_ratio: float = 1.0  # GRPO: ratio of negative samples to keep (1.0 = keep all, keep worst samples first)
+    keep_pos_ratio: float = 1.0  # GRPO: ratio of positive samples to keep (1.0 = keep all, keep best samples first)
 
 
 @dataclass
@@ -118,7 +119,7 @@ class PPOConfig:
         self.worker.actor.kl_penalty = self.algorithm.kl_penalty
         self.worker.actor.kl_coef = self.algorithm.kl_coef
         
-        # Validate keep_neg_ratio range [0, 1]
+        # Validate keep_neg_ratio and keep_pos_ratio range [0, 1]
         if not (0.0 <= self.algorithm.keep_neg_ratio <= 1.0):
             raise ValueError(
                 f"keep_neg_ratio must be in the range [0.0, 1.0]. "
@@ -126,12 +127,19 @@ class PPOConfig:
                 f"0.0 means discard all negative samples, 1.0 means keep all negative samples."
             )
         
-        # Validate keep_neg_ratio: only supported for grpo and bw_grpo
-        if self.algorithm.adv_estimator not in ["grpo", "bw_grpo"] and self.algorithm.keep_neg_ratio != 1.0:
+        if not (0.0 <= self.algorithm.keep_pos_ratio <= 1.0):
             raise ValueError(
-                f"keep_neg_ratio is currently only supported for grpo and bw_grpo algorithms. "
-                f"Got adv_estimator='{self.algorithm.adv_estimator}' with keep_neg_ratio={self.algorithm.keep_neg_ratio}. "
-                f"Please either set adv_estimator='grpo' or 'bw_grpo', or set keep_neg_ratio=1.0."
+                f"keep_pos_ratio must be in the range [0.0, 1.0]. "
+                f"Got keep_pos_ratio={self.algorithm.keep_pos_ratio}. "
+                f"0.0 means discard all positive samples, 1.0 means keep all positive samples."
+            )
+        
+        # Validate keep_neg_ratio and keep_pos_ratio: only supported for grpo
+        if self.algorithm.adv_estimator != "grpo" and (self.algorithm.keep_neg_ratio != 1.0 or self.algorithm.keep_pos_ratio != 1.0):
+            raise ValueError(
+                f"keep_neg_ratio and keep_pos_ratio are currently only supported for grpo algorithm. "
+                f"Got adv_estimator='{self.algorithm.adv_estimator}' with keep_neg_ratio={self.algorithm.keep_neg_ratio}, keep_pos_ratio={self.algorithm.keep_pos_ratio}. "
+                f"Please either set adv_estimator='grpo', or set both keep_neg_ratio=1.0 and keep_pos_ratio=1.0."
             )
 
     def deep_post_init(self):
