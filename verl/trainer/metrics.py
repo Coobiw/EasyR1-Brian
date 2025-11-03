@@ -186,14 +186,28 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str
     if "advantages_original" in batch.batch:
         # This means we're using GRPO with sample filtering (keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0)
         # batch["advantages"] contains filtered advantages (used for training)
+        # If compute_new_adv=True, these are recomputed advantages; otherwise they are original advantages
         valid_adv_specific = torch.masked_select(advantages, response_mask)
         
-        # Compute metrics for filtered advantages
-        additional_metrics = {
-            "critic/advantages_processed/mean": torch.mean(valid_adv_specific).detach().item(),
-            "critic/advantages_processed/max": torch.max(valid_adv_specific).detach().item(),
-            "critic/advantages_processed/min": torch.min(valid_adv_specific).detach().item(),
-        }
+        # Filter out zeros (filtered samples) for more meaningful statistics
+        non_zero_adv = valid_adv_specific[valid_adv_specific != 0.0]
+        
+        if non_zero_adv.numel() > 0:
+            # Compute metrics for non-zero advantages (kept samples)
+            additional_metrics = {
+                "critic/advantages_processed/mean": torch.mean(non_zero_adv).detach().item(),
+                "critic/advantages_processed/max": torch.max(non_zero_adv).detach().item(),
+                "critic/advantages_processed/min": torch.min(non_zero_adv).detach().item(),
+                "critic/advantages_processed/std": torch.std(non_zero_adv).detach().item(),
+            }
+        else:
+            # All samples filtered (should not happen in practice)
+            additional_metrics = {
+                "critic/advantages_processed/mean": 0.0,
+                "critic/advantages_processed/max": 0.0,
+                "critic/advantages_processed/min": 0.0,
+                "critic/advantages_processed/std": 0.0,
+            }
 
     if use_critic:
         values = batch.batch["values"]
