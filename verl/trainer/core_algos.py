@@ -141,7 +141,8 @@ def compute_grpo_outcome_advantage(
     index: torch.Tensor, 
     eps: float = 1e-6,
     keep_neg_ratio: float = 1.0,
-    keep_pos_ratio: float = 1.0
+    keep_pos_ratio: float = 1.0,
+    compute_new_adv: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute advantage for GRPO, operating only on Outcome reward
@@ -153,6 +154,8 @@ def compute_grpo_outcome_advantage(
       Keep a portion of positive samples (advantage > 0) based on keep_pos_ratio (keep best samples first - highest advantages)
     - If keep_neg_ratio < 1.0:
       Keep a portion of negative samples (advantage < 0) based on keep_neg_ratio (keep worst samples first - lowest advantages)
+    - If compute_new_adv = True:
+      Recompute advantages using only kept samples (recalculate mean and std from kept samples)
 
     Args:
         token_level_rewards: `(torch.Tensor)`
@@ -169,6 +172,9 @@ def compute_grpo_outcome_advantage(
         keep_pos_ratio: `(float)`
             Ratio of positive samples to keep (0.0 to 1.0)
             1.0 = keep all, 0.5 = keep best 50% of positive samples (highest advantages)
+        compute_new_adv: `(bool)`
+            If True, recompute advantages using only kept samples (after filtering)
+            If False, use original advantages for kept samples
 
     Returns:
         advantages: `(torch.Tensor)`
@@ -281,6 +287,42 @@ def compute_grpo_outcome_advantage(
 
     returns = filtered_advantages.unsqueeze(-1) * response_mask
     winner_mask = sample_mask.unsqueeze(-1) * response_mask  # Broadcast to token level
+    
+    # If compute_new_adv=True, recompute advantages using only kept samples
+    if compute_new_adv and (keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0):
+        # Recompute advantages for kept samples using their own mean and std
+        new_advantages = torch.zeros_like(original_scores)
+        
+        for idx in id2score:
+            group_indices = id2idx_list[idx]
+            
+            # Find kept samples in this group
+            kept_indices = [i for i in group_indices if sample_mask[i] == 1.0]
+            
+            if len(kept_indices) < 2:
+                # Not enough samples to compute std, use original advantages
+                # This should rarely happen if keep_pos_ratio and keep_neg_ratio are reasonable
+                for i in kept_indices:
+                    new_advantages[i] = original_scores[i]
+            else:
+                # Recompute mean and std using only kept samples
+                kept_scores = torch.tensor([scores[i] for i in kept_indices])
+                kept_mean = torch.mean(kept_scores)
+                kept_std = torch.std(kept_scores)
+                
+                # Renormalize kept samples
+                for i in kept_indices:
+                    if kept_std < eps:
+                        # If std is 0 (all kept samples have same score), set advantage to 0
+                        new_advantages[i] = 0.0
+                    else:
+                        new_advantages[i] = (scores[i] - kept_mean) / kept_std
+        
+        # Use new advantages for training
+        final_advantages = new_advantages.unsqueeze(-1) * response_mask
+        returns = new_advantages.unsqueeze(-1) * response_mask
+        
+        return final_advantages, returns, advantages_original, winner_mask
     
     return returns, returns, advantages_original, winner_mask
 

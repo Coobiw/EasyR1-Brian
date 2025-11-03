@@ -71,6 +71,7 @@ class AlgorithmConfig:
     kl_target: float = 0.0
     keep_neg_ratio: float = 1.0  # GRPO: ratio of negative samples to keep (1.0 = keep all, keep worst samples first)
     keep_pos_ratio: float = 1.0  # GRPO: ratio of positive samples to keep (1.0 = keep all, keep best samples first)
+    compute_new_adv: bool = False  # GRPO: recompute advantages using only kept samples after filtering
 
 
 @dataclass
@@ -140,6 +141,22 @@ class PPOConfig:
                 f"keep_neg_ratio and keep_pos_ratio are currently only supported for grpo algorithm. "
                 f"Got adv_estimator='{self.algorithm.adv_estimator}' with keep_neg_ratio={self.algorithm.keep_neg_ratio}, keep_pos_ratio={self.algorithm.keep_pos_ratio}. "
                 f"Please either set adv_estimator='grpo', or set both keep_neg_ratio=1.0 and keep_pos_ratio=1.0."
+            )
+        
+        # Validate compute_new_adv: only supported for grpo
+        if self.algorithm.adv_estimator != "grpo" and self.algorithm.compute_new_adv:
+            raise ValueError(
+                f"compute_new_adv is currently only supported for grpo algorithm. "
+                f"Got adv_estimator='{self.algorithm.adv_estimator}' with compute_new_adv={self.algorithm.compute_new_adv}. "
+                f"Please either set adv_estimator='grpo', or set compute_new_adv=False."
+            )
+        
+        # Validate compute_new_adv: only useful when filtering is enabled
+        if self.algorithm.compute_new_adv and self.algorithm.keep_neg_ratio == 1.0 and self.algorithm.keep_pos_ratio == 1.0:
+            print(
+                f"⚠️ Warning: compute_new_adv=True but keep_neg_ratio=1.0 and keep_pos_ratio=1.0. "
+                f"compute_new_adv is only effective when sample filtering is enabled (keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0). "
+                f"The computed advantages will be the same as the original GRPO advantages."
             )
 
     def deep_post_init(self):

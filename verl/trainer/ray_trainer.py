@@ -164,7 +164,7 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.KLController, kl_penal
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0, keep_neg_ratio: float = 1.0, keep_pos_ratio: float = 1.0):
+def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma: float = 1.0, lam: float = 1.0, keep_neg_ratio: float = 1.0, keep_pos_ratio: float = 1.0, compute_new_adv: bool = False):
     token_level_rewards = data.batch["token_level_rewards"]
     response_mask = data.batch["response_mask"]
     index = data.non_tensor_batch["uid"]
@@ -177,8 +177,9 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         # GRPO: compute advantages with optional positive and negative sample filtering
         # Support keep_neg_ratio: keep a portion of negative samples based on advantage ranking (worst first)
         # Support keep_pos_ratio: keep a portion of positive samples based on advantage ranking (best first)
+        # Support compute_new_adv: recompute advantages using only kept samples (after filtering)
         advantages, returns, advantages_original, winner_mask = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards, response_mask, index, keep_neg_ratio=keep_neg_ratio, keep_pos_ratio=keep_pos_ratio
+            token_level_rewards, response_mask, index, keep_neg_ratio=keep_neg_ratio, keep_pos_ratio=keep_pos_ratio, compute_new_adv=compute_new_adv
         )
         # Store original advantages for metrics (especially when keep_neg_ratio < 1.0 or keep_pos_ratio < 1.0)
         data.batch["advantages_original"] = advantages_original
@@ -849,6 +850,7 @@ class RayPPOTrainer:
                             lam=self.config.algorithm.lam,
                             keep_neg_ratio=self.config.algorithm.keep_neg_ratio,
                             keep_pos_ratio=self.config.algorithm.keep_pos_ratio,
+                            compute_new_adv=self.config.algorithm.compute_new_adv,
                         )
 
                     # update critic
