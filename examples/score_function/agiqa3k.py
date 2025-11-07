@@ -22,29 +22,56 @@ def grade_answer_gaussian(
     pred,
     gt,
     r_min: float = 0.05,     # 在 diff=1 处的目标最小奖励
-    diff_at_rmin: float = 1.0,  # “相差多少分”时衰减到 r_min（原始分值尺度）
+    diff_at_rmin: float = 1.0,  # "相差多少分"时衰减到 r_min（原始分值尺度）
     use_floor: bool = True,
 ) -> float:
-    if float(pred) < 1.0 or float(pred) > 5.0:
-        return 0.
-    # 归一误差到[0,1]，gt/pred在[1,5]
-    d = abs(float(pred) - float(gt)) / 4.0
-    d0 = diff_at_rmin / 4.0
+    try:
+        # 转换为浮点数并检查有效性
+        pred_val = float(pred)
+        gt_val = float(gt)
+        
+        # 检查输入是否为 NaN 或 inf
+        if not math.isfinite(pred_val) or not math.isfinite(gt_val):
+            print(f"Warning: Invalid input in grade_answer_gaussian: pred={pred}, gt={gt}")
+            return 0.0
+        
+        # 检查预测范围
+        if pred_val < 1.0 or pred_val > 5.0:
+            return 0.0
+        
+        # 归一误差到[0,1]，gt/pred在[1,5]
+        d = abs(pred_val - gt_val) / 4.0
+        
+        # 保护 diff_at_rmin 不为 0
+        diff_at_rmin_safe = max(abs(float(diff_at_rmin)), 1e-6)
+        d0 = diff_at_rmin_safe / 4.0
 
-    # 数值保护
-    r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
+        # 数值保护
+        r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
 
-    # 由 r(d0)=r_min 反推 sigma（高斯）
-    sigma = d0 / math.sqrt(2.0 * math.log(1.0 / r_min_clamped))
+        # 由 r(d0)=r_min 反推 sigma（高斯）
+        sigma = d0 / math.sqrt(2.0 * math.log(1.0 / r_min_clamped))
 
-    # 高斯衰减（标量）
-    r = math.exp(- (d ** 2) / (2.0 * sigma ** 2))
+        # 高斯衰减（标量）
+        r = math.exp(- (d ** 2) / (2.0 * sigma ** 2))
 
-    # 地板（避免稀疏）
-    if use_floor:
-        r = max(r, r_min_clamped)
+        # 地板（避免稀疏）
+        if use_floor:
+            r = max(r, r_min_clamped)
+        
+        # 确保在 [0, 1] 范围内
+        r = max(0.0, min(r, 1.0))
+        
+        # 最终检查结果是否有效
+        if not math.isfinite(r):
+            print(f"Warning: Invalid result in grade_answer_gaussian: r={r}, pred={pred}, gt={gt}, d={d}, sigma={sigma}")
+            return 0.0
 
-    return float(r)
+        return float(r)
+    
+    except (ValueError, TypeError, ZeroDivisionError) as e:
+        print(f"Warning: Exception in grade_answer_gaussian: {e}, pred={pred}, gt={gt}")
+        return 0.0
 
 def grade_answer_laplace(
     pred,
@@ -54,28 +81,53 @@ def grade_answer_laplace(
     use_floor: bool = True,
 ) -> float:
     """Compute Laplace-shaped point-wise reward for regression QA tasks."""
-    # 检查预测范围
-    if float(pred) < 1.0 or float(pred) > 5.0:
+    try:
+        # 转换为浮点数并检查有效性
+        pred_val = float(pred)
+        gt_val = float(gt)
+        
+        # 检查输入是否为 NaN 或 inf
+        if not math.isfinite(pred_val) or not math.isfinite(gt_val):
+            print(f"Warning: Invalid input in grade_answer_laplace: pred={pred}, gt={gt}")
+            return 0.0
+        
+        # 检查预测范围
+        if pred_val < 1.0 or pred_val > 5.0:
+            return 0.0
+
+        # 归一误差到 [0,1]，gt/pred 在 [1,5]
+        d = abs(pred_val - gt_val) / 4.0
+        
+        # 保护 diff_at_rmin 不为 0
+        diff_at_rmin_safe = max(abs(float(diff_at_rmin)), 1e-6)
+        d0 = diff_at_rmin_safe / 4.0
+
+        # 数值保护
+        r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
+
+        # 由 r(d0)=r_min 反推 τ（拉普拉斯）
+        tau = d0 / math.log(1.0 / r_min_clamped)
+
+        # 拉普拉斯衰减（标量）
+        r = math.exp(- d / tau)
+
+        # 地板（避免稀疏）
+        if use_floor:
+            r = max(r, r_min_clamped)
+        
+        # 确保在 [0, 1] 范围内
+        r = max(0.0, min(r, 1.0))
+        
+        # 最终检查结果是否有效
+        if not math.isfinite(r):
+            print(f"Warning: Invalid result in grade_answer_laplace: r={r}, pred={pred}, gt={gt}, d={d}, tau={tau}")
+            return 0.0
+
+        return float(r)
+    
+    except (ValueError, TypeError, ZeroDivisionError) as e:
+        print(f"Warning: Exception in grade_answer_laplace: {e}, pred={pred}, gt={gt}")
         return 0.0
-
-    # 归一误差到 [0,1]，gt/pred 在 [1,5]
-    d = abs(float(pred) - float(gt)) / 4.0
-    d0 = diff_at_rmin / 4.0
-
-    # 数值保护
-    r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
-
-    # 由 r(d0)=r_min 反推 τ（拉普拉斯）
-    tau = d0 / math.log(1.0 / r_min_clamped)
-
-    # 拉普拉斯衰减（标量）
-    r = math.exp(- d / tau)
-
-    # 地板（避免稀疏）
-    if use_floor:
-        r = max(r, r_min_clamped)
-
-    return float(r)
 
 def grade_answer_l1(
     pred,
@@ -85,35 +137,57 @@ def grade_answer_l1(
     use_floor: bool = True,
 ) -> float:
     """Compute L1-based point-wise reward: r = 1 - coeff * |pred - gt|"""
-    # 检查预测范围
-    if float(pred) < 1.0 or float(pred) > 5.0:
+    try:
+        # 转换为浮点数并检查有效性
+        pred_val = float(pred)
+        gt_val = float(gt)
+        
+        # 检查输入是否为 NaN 或 inf
+        if not math.isfinite(pred_val) or not math.isfinite(gt_val):
+            print(f"Warning: Invalid input in grade_answer_l1: pred={pred}, gt={gt}")
+            return 0.0
+        
+        # 检查预测范围
+        if pred_val < 1.0 or pred_val > 5.0:
+            return 0.0
+
+        # 计算实际误差
+        diff = abs(pred_val - gt_val)
+
+        # 数值保护
+        r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
+        
+        # 保护 diff_at_rmin 不为 0
+        diff_at_rmin_safe = max(abs(float(diff_at_rmin)), 1e-6)
+
+        # 由 r(diff_at_rmin) = r_min 反推 coeff
+        # r_min = 1 - coeff * diff_at_rmin
+        # coeff = (1 - r_min) / diff_at_rmin
+        coeff = (1.0 - r_min_clamped) / diff_at_rmin_safe
+
+        # L1 线性衰减
+        r = 1.0 - coeff * diff
+
+        # 地板（避免稀疏）
+        if use_floor:
+            r = max(r, r_min_clamped)
+        else:
+            # 确保非负
+            r = max(r, 0.0)
+
+        # 确保在 [0, 1] 范围内
+        r = max(0.0, min(r, 1.0))
+        
+        # 最终检查结果是否有效
+        if not math.isfinite(r):
+            print(f"Warning: Invalid result in grade_answer_l1: r={r}, pred={pred}, gt={gt}, diff={diff}, coeff={coeff}")
+            return 0.0
+
+        return float(r)
+    
+    except (ValueError, TypeError) as e:
+        print(f"Warning: Exception in grade_answer_l1: {e}, pred={pred}, gt={gt}")
         return 0.0
-
-    # 计算实际误差
-    diff = abs(float(pred) - float(gt))
-
-    # 数值保护
-    r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
-
-    # 由 r(diff_at_rmin) = r_min 反推 coeff
-    # r_min = 1 - coeff * diff_at_rmin
-    # coeff = (1 - r_min) / diff_at_rmin
-    coeff = (1.0 - r_min_clamped) / diff_at_rmin
-
-    # L1 线性衰减
-    r = 1.0 - coeff * diff
-
-    # 地板（避免稀疏）
-    if use_floor:
-        r = max(r, r_min_clamped)
-    else:
-        # 确保非负
-        r = max(r, 0.0)
-
-    # 确保在 [0, 1] 范围内
-    r = min(r, 1.0)
-
-    return float(r)
 
 def grade_answer_l2(
     pred,
@@ -123,35 +197,57 @@ def grade_answer_l2(
     use_floor: bool = True,
 ) -> float:
     """Compute L2-based point-wise reward: r = 1 - coeff * (pred - gt)^2"""
-    # 检查预测范围
-    if float(pred) < 1.0 or float(pred) > 5.0:
+    try:
+        # 转换为浮点数并检查有效性
+        pred_val = float(pred)
+        gt_val = float(gt)
+        
+        # 检查输入是否为 NaN 或 inf
+        if not math.isfinite(pred_val) or not math.isfinite(gt_val):
+            print(f"Warning: Invalid input in grade_answer_l2: pred={pred}, gt={gt}")
+            return 0.0
+        
+        # 检查预测范围
+        if pred_val < 1.0 or pred_val > 5.0:
+            return 0.0
+
+        # 计算实际误差
+        diff = abs(pred_val - gt_val)
+
+        # 数值保护
+        r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
+        
+        # 保护 diff_at_rmin 不为 0
+        diff_at_rmin_safe = max(abs(float(diff_at_rmin)), 1e-6)
+
+        # 由 r(diff_at_rmin) = r_min 反推 coeff
+        # r_min = 1 - coeff * (diff_at_rmin)^2
+        # coeff = (1 - r_min) / (diff_at_rmin)^2
+        coeff = (1.0 - r_min_clamped) / (diff_at_rmin_safe ** 2)
+
+        # L2 二次衰减
+        r = 1.0 - coeff * (diff ** 2)
+
+        # 地板（避免稀疏）
+        if use_floor:
+            r = max(r, r_min_clamped)
+        else:
+            # 确保非负
+            r = max(r, 0.0)
+
+        # 确保在 [0, 1] 范围内
+        r = max(0.0, min(r, 1.0))
+        
+        # 最终检查结果是否有效
+        if not math.isfinite(r):
+            print(f"Warning: Invalid result in grade_answer_l2: r={r}, pred={pred}, gt={gt}, diff={diff}, coeff={coeff}")
+            return 0.0
+
+        return float(r)
+    
+    except (ValueError, TypeError) as e:
+        print(f"Warning: Exception in grade_answer_l2: {e}, pred={pred}, gt={gt}")
         return 0.0
-
-    # 计算实际误差
-    diff = abs(float(pred) - float(gt))
-
-    # 数值保护
-    r_min_clamped = max(min(float(r_min), 0.999999), 1e-6)
-
-    # 由 r(diff_at_rmin) = r_min 反推 coeff
-    # r_min = 1 - coeff * (diff_at_rmin)^2
-    # coeff = (1 - r_min) / (diff_at_rmin)^2
-    coeff = (1.0 - r_min_clamped) / (diff_at_rmin ** 2)
-
-    # L2 二次衰减
-    r = 1.0 - coeff * (diff ** 2)
-
-    # 地板（避免稀疏）
-    if use_floor:
-        r = max(r, r_min_clamped)
-    else:
-        # 确保非负
-        r = max(r, 0.0)
-
-    # 确保在 [0, 1] 范围内
-    r = min(r, 1.0)
-
-    return float(r)
 
 
 def format_reward(predict_str: str) -> float:
