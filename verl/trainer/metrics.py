@@ -27,6 +27,10 @@ def logistic_func(X, bayta1, bayta2, bayta3, bayta4):
     return yhat
 
 def fit_function(y_label, y_output):
+    """
+    Fit a logistic function to the data, handling NaN and inf values.
+    Returns the fitted output and a dictionary of statistics.
+    """
     beta = [np.max(y_label), np.min(y_label), np.mean(y_output), 0.5]
     popt, _ = curve_fit(logistic_func, y_output, \
         y_label, p0=beta, maxfev=100000000)
@@ -36,18 +40,75 @@ def fit_function(y_label, y_output):
 
 
 def performance_fit(y_label, y_output, func_fit=True):
-    if func_fit:
-        y_output_logistic = fit_function(y_label, y_output)
-    else:
-        y_output_logistic = y_output
-    PLCC = stats.pearsonr(y_output_logistic, y_label)[0]
-    SRCC = stats.spearmanr(y_output, y_label)[0]
+    """
+    Calculate PLCC, SRCC, and main score for quality assessment.
+    Filters out NaN and inf values before computation.
+    
+    Returns:
+        tuple: (PLCC, SRCC, main_score, invalid_count_dict)
+    """
+    # Convert to numpy arrays if needed
+    y_label = np.asarray(y_label, dtype=np.float64)
+    y_output = np.asarray(y_output, dtype=np.float64)
+    
+    # Find valid (finite) values
+    valid_mask = np.isfinite(y_label) & np.isfinite(y_output)
+    num_invalid = np.sum(~valid_mask)
+    num_total = len(y_label)
+    
+    # Count NaN and inf separately for detailed logging
+    num_nan = np.sum(np.isnan(y_label) | np.isnan(y_output))
+    num_inf = np.sum(np.isinf(y_label) | np.isinf(y_output))
+    
+    invalid_stats = {
+        'total_samples': num_total,
+        'invalid_samples': int(num_invalid),
+        'nan_samples': int(num_nan),
+        'inf_samples': int(num_inf),
+        'valid_samples': int(np.sum(valid_mask))
+    }
+    
+    # Filter to valid values only
+    y_label_valid = y_label[valid_mask]
+    y_output_valid = y_output[valid_mask]
+    
+    # Check if we have enough valid samples for curve fitting
+    if len(y_label_valid) < 4:
+        # Not enough samples for curve fitting (need at least 4 for 4 parameters)
+        print(f"Warning: Only {len(y_label_valid)} valid samples out of {num_total} for quality assessment. "
+              f"Skipping curve fitting. NaN: {num_nan}, Inf: {num_inf}")
+        return 0.0, 0.0, 0.0, invalid_stats
+    
+    try:
+        if func_fit:
+            y_output_logistic = fit_function(y_label_valid, y_output_valid)
+        else:
+            y_output_logistic = y_output_valid
+            
+        PLCC = stats.pearsonr(y_output_logistic, y_label_valid)[0]
+        SRCC = stats.spearmanr(y_output_valid, y_label_valid)[0]
+        
+        # Log warning if we filtered out samples
+        if num_invalid > 0:
+            print(f"Quality assessment: Filtered {num_invalid}/{num_total} invalid samples "
+                  f"(NaN: {num_nan}, Inf: {num_inf})")
+        
+        return PLCC, SRCC, (PLCC+SRCC) / 2, invalid_stats
+    except Exception as e:
+        print(f"Warning: Failed to compute quality assessment metrics: {e}")
+        print(f"Valid samples: {len(y_label_valid)}/{num_total}, NaN: {num_nan}, Inf: {num_inf}")
+        return 0.0, 0.0, 0.0, invalid_stats
 
-    return PLCC, SRCC, (PLCC+SRCC) / 2
 
 def quality_assessment_metrics(y_out: List[str], y_label: List[str]):
-    plcc, srcc, main_score = performance_fit(y_label, y_out, func_fit=True)
-    return plcc, srcc, main_score
+    """
+    Compute quality assessment metrics (PLCC, SRCC, main_score).
+    
+    Returns:
+        tuple: (plcc, srcc, main_score, invalid_stats_dict)
+    """
+    plcc, srcc, main_score, invalid_stats = performance_fit(y_label, y_out, func_fit=True)
+    return plcc, srcc, main_score, invalid_stats
     
 def reduce_metrics(metrics: Dict[str, List[Any]]) -> Dict[str, Any]:
     return {key: np.mean(value) for key, value in metrics.items()}

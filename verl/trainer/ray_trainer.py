@@ -527,14 +527,21 @@ class RayPPOTrainer:
             print(f"Computing AGIQA-3K metrics on {len(y_out)} valid samples (errors: {error_count})")
             
             # Compute quality assessment metrics
-            plcc, srcc, main_score = quality_assessment_metrics(y_out, y_label)
+            plcc, srcc, main_score, invalid_stats = quality_assessment_metrics(y_out, y_label)
             agiqa_metrics.update({
                 "val/plcc": plcc,
                 "val/srcc": srcc,
                 "val/main_score": main_score,
+                "val/quality_total_samples": invalid_stats['total_samples'],
+                "val/quality_valid_samples": invalid_stats['valid_samples'],
+                "val/quality_invalid_samples": invalid_stats['invalid_samples'],
+                "val/quality_nan_samples": invalid_stats['nan_samples'],
+                "val/quality_inf_samples": invalid_stats['inf_samples'],
             })
             
             print(f"AGIQA-3K Metrics: PLCC={plcc:.4f}, SRCC={srcc:.4f}, MainScore={main_score:.4f}")
+            print(f"Quality Stats: Valid={invalid_stats['valid_samples']}/{invalid_stats['total_samples']}, "
+                  f"NaN={invalid_stats['nan_samples']}, Inf={invalid_stats['inf_samples']}")
         else:
             print(f"Warning: No valid predictions extracted for AGIQA-3K metrics (errors: {error_count})")
         
